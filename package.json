@@ -1,0 +1,25 @@
+{
+  "name": "bujo-desktop",
+  "version": "0.1.0",
+  "private": true,
+  "description": "子弹笔记（Bullet Journal）桌面应用：记录笔记并读取 .md 文件",
+  "main": "src/main/main.js",
+  "scripts": {
+    "start": "electron .",
+    "test": "node --test",
+    "smoke": "electron . --smoke-test"
+  },
+  "keywords": [
+    "electron",
+    "bullet-journal",
+    "markdown",
+    "notes"
+  ],
+  "license": "MIT",
+  "dependencies": {
+    "marked": "^15.0.0"
+  },
+  "devDependencies": {
+    "electron": "^33.0.0"
+  }
+}

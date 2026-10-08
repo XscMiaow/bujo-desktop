@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self';"
+    />
+    <title>子弹笔记</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <header class="toolbar">
+      <div class="brand">
+        <span class="brand-mark">•</span>
+        <span class="brand-name">子弹笔记</span>
+      </div>
+
+      <div class="toolbar-actions">
+        <button id="open-btn" class="btn primary" type="button">打开 .md 文件</button>
+        <button id="reload-btn" class="btn" type="button" disabled>重新载入</button>
+        <div class="segmented" role="group" aria-label="显示模式">
+          <button id="view-preview" class="seg active" type="button">预览</button>
+          <button id="view-source" class="seg" type="button">原文</button>
+        </div>
+        <button id="chat-toggle" class="btn" type="button" title="AI 聊天（Ctrl/Cmd + J）">AI 聊天</button>
+        <button id="settings-open" class="icon-btn" type="button" title="AI 设置" aria-label="AI 设置">⚙</button>
+      </div>
+    </header>
+
+    <div class="workspace">
+      <aside class="sidebar" id="sidebar" aria-label="日记列表">
+        <div class="sidebar-head">
+          <button id="sidebar-toggle" class="icon-btn" type="button" title="收起日记栏" aria-label="收起或展开日记栏">‹</button>
+          <span class="sidebar-title">日记</span>
+          <button id="sidebar-refresh" class="icon-btn" type="button" title="刷新列表" aria-label="刷新日记列表">↻</button>
+        </div>
+        <div class="sidebar-dir" id="sidebar-dir" title=""></div>
+        <ul class="journal-list" id="journal-list"></ul>
+        <div class="sidebar-empty" id="sidebar-empty" hidden>
+          还没有日记 —— 把 .md 文件放进日记目录，或点「刷新列表」
+        </div>
+      </aside>
+
+      <section class="main-col">
+        <div class="file-bar" id="file-bar">
+          <div class="file-meta" id="file-meta">尚未打开文件 —— 点击「打开 .md 文件」，或把 .md 拖进窗口</div>
+          <div class="stats" id="stats"></div>
+        </div>
+
+        <div id="error" class="error" hidden></div>
+
+        <main id="content" class="content drop-target">
+          <section class="empty-state" id="empty-state">
+            <h1>从一份 Markdown 笔记开始</h1>
+            <p>左侧双击任意一篇日记即可打开；也支持子弹笔记语法，按符号分类显示：</p>
+            <ul class="empty-legend" id="empty-legend"></ul>
+            <p class="hint">快捷键 Ctrl/Cmd + O 打开文件</p>
+          </section>
+          <article id="note" class="note" hidden></article>
+        </main>
+      </section>
+
+      <aside class="chat-panel" id="chat-panel" aria-label="AI 聊天" hidden>
+        <div class="chat-head">
+          <span class="chat-title">AI 聊天</span>
+          <span class="chat-status" id="chat-status"></span>
+          <button id="chat-settings" class="icon-btn" type="button" title="AI 设置" aria-label="AI 设置">⚙</button>
+          <button id="chat-close" class="icon-btn" type="button" title="收起聊天" aria-label="收起聊天">✕</button>
+        </div>
+
+        <ul class="chat-messages" id="chat-messages"></ul>
+        <div class="chat-empty" id="chat-empty">
+          聊聊今天要做的事，回答可以一键写进当前笔记或今天的日记（会转成子弹笔记条目）。<br />
+          先把 API Key 填进 ⚙ 设置。
+        </div>
+
+        <form class="chat-composer" id="chat-form">
+          <textarea id="chat-input" rows="3" placeholder="问点什么…（Enter 发送，Shift + Enter 换行）"></textarea>
+          <div class="chat-composer-row">
+            <label class="chat-target">
+              记入
+              <select id="chat-target">
+                <option value="current">当前笔记</option>
+                <option value="daily">今天的日记</option>
+              </select>
+            </label>
+            <button id="chat-cancel" class="btn" type="button" hidden>停止</button>
+            <button id="chat-send" class="btn primary" type="submit">发送</button>
+          </div>
+        </form>
+      </aside>
+    </div>
+
+    <footer class="legend" id="legend"></footer>
+
+    <div class="modal" id="settings-modal" hidden>
+      <div class="modal-card" role="dialog" aria-label="AI 设置">
+        <div class="modal-head">
+          <h2>AI 设置</h2>
+          <button id="settings-close" class="icon-btn" type="button" aria-label="关闭">✕</button>
+        </div>
+
+        <div class="modal-body">
+          <label class="field">
+            <span>服务商预设</span>
+            <select id="setting-provider"></select>
+          </label>
+          <label class="field">
+            <span>接口地址</span>
+            <input id="setting-base-url" type="text" placeholder="https://api.openai.com/v1" />
+          </label>
+          <label class="field">
+            <span>模型</span>
+            <input id="setting-model" type="text" placeholder="gpt-4o-mini" />
+          </label>
+          <label class="field">
+            <span>API Key</span>
+            <input id="setting-api-key" type="password" autocomplete="off" placeholder="sk-..." />
+            <small class="hint" id="setting-key-hint"></small>
+          </label>
+          <label class="field">
+            <span>系统提示词</span>
+            <textarea id="setting-system-prompt" rows="3"></textarea>
+          </label>
+          <p class="hint" id="setting-storage-hint"></p>
+        </div>
+
+        <div class="modal-foot">
+          <button id="settings-clear-key" class="btn" type="button">清除密钥</button>
+          <span class="modal-status" id="settings-status"></span>
+          <button id="settings-save" class="btn primary" type="button">保存</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="drop-overlay" class="drop-overlay" hidden>
+      <div class="drop-overlay-inner">松手即可打开这个 .md 文件</div>
+    </div>
+
+    <script src="../../node_modules/marked/lib/marked.umd.js"></script>
+    <script src="../shared/bullet-parser.js"></script>
+    <script src="../shared/journal-date.js"></script>
+    <script src="../shared/chat-to-note.js"></script>
+    <script src="renderer.js"></script>
+    <script src="chat.js"></script>
+  </body>
+</html>
