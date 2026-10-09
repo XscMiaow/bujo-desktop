@@ -71,7 +71,9 @@
 
         <ul class="chat-messages" id="chat-messages"></ul>
         <div class="chat-empty" id="chat-empty">
-          聊聊今天要做的事，回答可以一键写进当前笔记或今天的日记（会转成子弹笔记条目）。<br />
+          聊聊今天要做的事。AI 会分别给出「对话」和「笔记草稿」：草稿里是要新增的条目，
+          以及要改动已有条目的地方；与笔记里重复的内容不会再写一遍。<br />
+          下面选「参考」哪一篇笔记，AI 就能看到它已经记过什么。<br />
           先把 API Key 填进 ⚙ 设置。
         </div>
 
@@ -83,6 +85,14 @@
               <select id="chat-target">
                 <option value="current">当前笔记</option>
                 <option value="daily">今天的日记</option>
+              </select>
+            </label>
+            <label class="chat-target">
+              参考
+              <select id="chat-context">
+                <option value="current">当前笔记</option>
+                <option value="daily">今天的日记</option>
+                <option value="none">不附带</option>
               </select>
             </label>
             <button id="chat-cancel" class="btn" type="button" hidden>停止</button>
@@ -122,7 +132,13 @@
           <label class="field">
             <span>系统提示词</span>
             <textarea id="setting-system-prompt" rows="3"></textarea>
+            <small class="hint">这里只写角色、语气和回答风格；「对话 + 新增条目 + 笔记改动」的格式约定由应用自动接在后面，不需要你维护。</small>
           </label>
+
+          <details class="prompt-protocol" id="setting-protocol">
+            <summary>应用自动追加的格式约定（随功能更新）</summary>
+            <pre id="setting-protocol-text"></pre>
+          </details>
           <p class="hint" id="setting-storage-hint"></p>
         </div>
 
@@ -141,7 +157,9 @@
     <script src="../../node_modules/marked/lib/marked.umd.js"></script>
     <script src="../shared/bullet-parser.js"></script>
     <script src="../shared/journal-date.js"></script>
+    <script src="../shared/ai-reply.js"></script>
     <script src="../shared/chat-to-note.js"></script>
+    <script src="../shared/note-edit.js"></script>
     <script src="renderer.js"></script>
     <script src="chat.js"></script>
   </body>

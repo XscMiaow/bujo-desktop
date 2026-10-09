@@ -6,7 +6,7 @@ const fs = require('node:fs/promises');
 const os = require('node:os');
 const path = require('node:path');
 
-const { appendToNote, isInsideDirectory } = require('../src/main/note-service.js');
+const { appendToNote, readNote, integrateNoteFile, isInsideDirectory } = require('../src/main/note-service.js');
 
 let tmpDir;
 
@@ -79,6 +79,52 @@ test('CRLF 内容会被统一成 LF', async () => {
   await appendToNote(file, '- 一\r\n- 二\r\n');
   assert.equal(await fs.readFile(file, 'utf8'), '头部\n\n- 一\n- 二\n');
 });
+
+test('整合写入：改已有条目、跳过重复条目，其它内容原样保留', async () => {
+  const file = path.join(tmpDir, 'g.md');
+  await fs.writeFile(file, '# 笔记\n\n- [ ] 写周报\n- 整理收件箱\n', 'utf8');
+
+  const result = await integrateNoteFile(file, {
+    edit: '完成：整理收件箱',
+    header: '**AI 记录 · 09:05**',
+    lines: ['- [ ] 给客户回信', '- 整理收件箱']
+  });
+
+  assert.equal(result.changed, true);
+  assert.equal(result.name, 'g.md');
+  assert.equal(result.report.added.length, 1);
+  assert.equal(result.report.duplicates.length, 1);
+  assert.equal(result.report.edits.applied.length, 1);
+
+  const content = await fs.readFile(file, 'utf8');
+  assert.ok(content.startsWith('# 笔记'), '原有内容不动');
+  assert.ok(content.includes('- [x] 整理收件箱'), '改的是已有那一行');
+  assert.ok(content.includes('- [ ] 给客户回信'));
+  assert.equal((content.match(/整理收件箱/g) || []).length, 1, '重复的条目不再写一遍');
+});
+
+
+test('重复的一轮不会写文件（笔记没变化时不动磁盘）', async () => {
+  const file = path.join(tmpDir, 'h.md');
+  await fs.writeFile(file, '# 笔记\n\n- [ ] 给客户回信\n', 'utf8');
+  const before = await fs.stat(file);
+
+  const again = await integrateNoteFile(file, { header: '**AI 记录 · 09:05**', lines: ['- 给客户回信'] });
+
+  assert.equal(again.changed, false);
+  assert.equal(again.report.added.length, 0);
+  assert.equal(again.report.duplicates.length, 1);
+  const after = await fs.stat(file);
+  assert.equal(after.mtimeMs, before.mtimeMs, '没有改动就不落盘');
+  assert.equal(await fs.readFile(file, 'utf8'), '# 笔记\n\n- [ ] 给客户回信\n');
+});
+
+
+test('readNote 读不到就报错，不返回空字符串', async () => {
+  await assert.rejects(() => readNote(path.join(tmpDir, 'nope.md')), /文件不存在/);
+  await assert.rejects(() => readNote(path.join(tmpDir, 'x.exe')), /只能写入 Markdown/);
+});
+
 
 test('isInsideDirectory 只认子路径', () => {
   const journals = path.join(tmpDir, 'journals');

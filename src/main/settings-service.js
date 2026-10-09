@@ -17,9 +17,20 @@ const DEFAULT_SETTINGS = {
   baseUrl: 'https://api.openai.com/v1',
   model: 'gpt-4o-mini',
   provider: 'openai',
-  systemPrompt: '你是子弹笔记（Bullet Journal）助手。回答简洁、条理清晰；可以执行的动作请写成「- [ ] 事项」，普通要点写成「- 要点」。',
+  // 这里只写角色与语气；「对话 + 新增条目 + 笔记改动」的格式约定由 ai-reply.buildSystemPrompt() 自动追加
+  systemPrompt: '你是子弹笔记（Bullet Journal）助手，中文作答。回答简洁、直接：结论、解释和追问说给用户听；先看笔记里已经记过什么，能改的就改，不要重复记一遍。',
   temperature: 0.7
 };
+
+/**
+ * 早期版本的默认提示词。功能改成「对话 + 日记块」后，旧文案会让模型直接把要点写进回答，
+ * 看到就自动换成新默认值；用户自己改过的提示词一律保留。
+ */
+const LEGACY_SYSTEM_PROMPTS = [
+  '你是子弹笔记（Bullet Journal）助手，中文作答。回答简洁、直接：结论、解释和追问说给用户听，值得长期留存的内容才写成日记条目，不要堆砌。',
+  '你是子弹笔记（Bullet Journal）助手。回答简洁、条理清晰；可以执行的动作请写成「- [ ] 事项」，普通要点写成「- 要点」。',
+  '你是子弹笔记（Bullet Journal）助手。中文作答，回答简洁、条理清晰。'
+];
 
 /** 设置界面的服务商预设：都是 OpenAI 兼容的 /chat/completions 接口 */
 const PROVIDER_PRESETS = [
@@ -67,6 +78,19 @@ class SettingsService {
     return this.cache;
   }
 
+  /**
+   * 读出生效的系统提示词：
+   * - 没写过 → 新默认值
+   * - 还是旧版默认文案 → 自动升级成新默认值（它描述的是旧行为）
+   * - 用户自己写的（包括清空）→ 原样返回
+   */
+  resolveSystemPrompt(raw) {
+    if (typeof raw.systemPrompt !== 'string') return DEFAULT_SETTINGS.systemPrompt;
+    const trimmed = raw.systemPrompt.trim();
+    if (LEGACY_SYSTEM_PROMPTS.includes(trimmed)) return DEFAULT_SETTINGS.systemPrompt;
+    return raw.systemPrompt;
+  }
+
   /** 可以安全交给渲染层的部分：不含 key，只含 key 是否已配置与末四位提示 */
   getPublic() {
     const raw = this.readRaw();
@@ -74,7 +98,7 @@ class SettingsService {
       baseUrl: typeof raw.baseUrl === 'string' && raw.baseUrl ? raw.baseUrl : DEFAULT_SETTINGS.baseUrl,
       model: typeof raw.model === 'string' && raw.model ? raw.model : DEFAULT_SETTINGS.model,
       provider: typeof raw.provider === 'string' ? raw.provider : DEFAULT_SETTINGS.provider,
-      systemPrompt: typeof raw.systemPrompt === 'string' ? raw.systemPrompt : DEFAULT_SETTINGS.systemPrompt,
+      systemPrompt: this.resolveSystemPrompt(raw),
       temperature: typeof raw.temperature === 'number' ? raw.temperature : DEFAULT_SETTINGS.temperature,
       hasApiKey: Boolean(raw.apiKeyCipher || raw.apiKey),
       apiKeyHint: typeof raw.apiKeyHint === 'string' ? raw.apiKeyHint : null,
@@ -157,4 +181,4 @@ class SettingsService {
   }
 }
 
-module.exports = { SettingsService, DEFAULT_SETTINGS, PROVIDER_PRESETS };
+module.exports = { SettingsService, DEFAULT_SETTINGS, PROVIDER_PRESETS, LEGACY_SYSTEM_PROMPTS };

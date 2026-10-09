@@ -388,6 +388,202 @@ body {
   background: none;
 }
 
+.chat-body-dim {
+  margin: 0;
+  color: var(--text-dim);
+  font-size: 12px;
+}
+
+/* ---------- 笔记草稿卡片：只有这里的内容会写进笔记（新增条目 + 改动清单） ---------- */
+
+.chat-journal {
+  margin-top: 9px;
+  border: 1px solid #33405c;
+  border-left: 3px solid var(--kind-task);
+  border-radius: 7px;
+  background: #161c2a;
+}
+
+.chat-journal.is-empty {
+  border-left-color: #3a4054;
+  background: #171a22;
+}
+
+.chat-journal-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 5px 9px;
+  border-bottom: 1px solid #2a3348;
+}
+
+.chat-journal-title {
+  color: var(--kind-task);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+}
+
+.chat-journal.is-empty .chat-journal-title {
+  color: var(--text-dim);
+}
+
+.chat-journal-target {
+  color: var(--text-dim);
+  font-size: 10.5px;
+}
+
+.chat-journal-badge {
+  margin-left: auto;
+  margin-right: 6px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: #1f2940;
+  color: #9fb2d6;
+  font-size: 10.5px;
+  white-space: nowrap;
+}
+
+/* 「笔记改动」清单：改写 / 完成 / 删除 */
+.chat-edit-list {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  margin: 8px 10px 0;
+  padding: 7px 9px;
+  border: 1px solid #2b3448;
+  border-radius: 7px;
+  background: #141926;
+}
+
+.chat-edit-row {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  font-size: 11.5px;
+  line-height: 1.5;
+  word-break: break-word;
+}
+
+.chat-edit-op {
+  flex: none;
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: #222a3d;
+  color: var(--text-dim);
+  font-size: 10.5px;
+}
+
+.chat-edit-row.is-replace .chat-edit-op {
+  color: var(--kind-scheduled);
+}
+
+.chat-edit-row.is-done .chat-edit-op {
+  color: var(--kind-done);
+}
+
+.chat-edit-row.is-remove .chat-edit-op {
+  color: var(--kind-priority);
+}
+
+.chat-edit-old {
+  color: var(--text-dim);
+  text-decoration: line-through;
+}
+
+.chat-edit-row.is-done .chat-edit-old {
+  color: #cfd8ea;
+}
+
+.chat-edit-new {
+  color: var(--kind-migrated);
+}
+
+.chat-edit-arrow {
+  flex: none;
+  color: var(--text-dim);
+}
+
+.chat-edit-row.is-ignored {
+  color: var(--text-dim);
+  font-size: 11px;
+}
+
+/* 写入前的预览：会新增几条、改几处、哪几条重复被跳过 */
+.chat-journal-preview {
+  padding: 7px 10px 0;
+  color: #9fb2d6;
+  font-size: 11.5px;
+  line-height: 1.5;
+}
+
+.chat-journal-preview:empty {
+  display: none;
+}
+
+.chat-journal-body {
+  padding: 7px 10px 2px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.chat-journal-body:empty {
+  display: none;
+}
+
+.chat-journal-body p {
+  margin: 5px 0;
+}
+
+/* 草稿里的符号由 renderJournalDraft 写入，不再用浏览器的圆点 */
+.chat-journal-body ul {
+  margin: 5px 0;
+  padding-left: 0;
+  list-style: none;
+}
+
+.chat-journal-body li {
+  margin: 2px 0;
+}
+
+.chat-journal-body h2,
+.chat-journal-body h3 {
+  margin: 8px 0 4px;
+  font-size: 13.5px;
+}
+
+.chat-journal-hint {
+  padding: 7px 10px 0;
+  color: var(--text-dim);
+  font-size: 11.5px;
+  line-height: 1.5;
+}
+
+.chat-journal-hint:empty {
+  display: none;
+}
+
+.chat-journal-tools {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 7px 10px 9px;
+}
+
+.chat-journal-opt {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--text-dim);
+  font-size: 11.5px;
+  cursor: pointer;
+}
+
+.chat-journal-opt input {
+  margin: 0;
+}
+
 .chat-tools {
   display: flex;
   align-items: center;
@@ -519,6 +715,35 @@ body {
   font: inherit;
   font-size: 13px;
   resize: vertical;
+}
+
+.prompt-protocol {
+  margin: -4px 0 0;
+  font-size: 11.5px;
+  color: var(--text-dim);
+}
+
+.prompt-protocol summary {
+  cursor: pointer;
+  user-select: none;
+}
+
+.prompt-protocol summary:hover {
+  color: var(--text);
+}
+
+.prompt-protocol pre {
+  margin: 8px 0 0;
+  padding: 9px 10px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: #10121a;
+  color: #c8cede;
+  font-family: Consolas, "Cascadia Mono", monospace;
+  font-size: 11.5px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
 .modal-foot {

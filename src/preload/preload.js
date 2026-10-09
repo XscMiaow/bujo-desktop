@@ -62,9 +62,16 @@ contextBridge.exposeInMainWorld('bujo', {
 
   /* ---------------- 写入笔记 ---------------- */
 
-  /** 今天的日记文件（不存在则按模板新建） */
-  getTodayJournal: () => ipcRenderer.invoke('note:today'),
+  /**
+   * 今天的日记文件：{ ok, path, name, created, exists, content }
+   * 传 { create: false } 只读（不存在就 exists:false），不会顺手把文件建出来
+   */
+  getTodayJournal: (options) => ipcRenderer.invoke('note:today', options),
 
-  /** 追加内容到笔记：{ filePath } 或 { target: 'daily' } */
+  /**
+   * 写入笔记：{ filePath } 或 { target: 'daily' }，再带上要写的内容：
+   *   { header, lines, edit, dedupe } → 整合写入（改已有条目 + 跳过重复后再追加）
+   *   { markdown }                    → 直接追加一段 Markdown
+   */
   appendNote: (payload) => ipcRenderer.invoke('note:append', payload)
 });

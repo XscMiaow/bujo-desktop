@@ -72,3 +72,24 @@ test('空回答只会得到时间戳标题，不会破坏笔记', () => {
   const block = toNoteBlock({ answer: '', at: new Date(2026, 9, 7, 9, 5) });
   assert.equal(block.trim(), '**AI 记录 · 09:05**');
 });
+
+test('有日记块时只写日记块，对话内容一行都不落盘', () => {
+  const block = toNoteBlock({
+    journal: '## 今日重点\n- [ ] 先写周报\n- 再整理一下收件箱',
+    answer: '今天先把周报写完，剩下的明天再说。\n需要我列一下收件箱的清理步骤吗？',
+    at: new Date(2026, 9, 7, 14, 32)
+  });
+
+  assert.match(block, /- \[ \] 先写周报/);
+  assert.ok(!block.includes('剩下的明天再说'), '对话里的解释不进日记');
+  assert.ok(!block.includes('清理步骤'), '对话里的追问不进日记');
+
+  const { stats } = parseDocument(block);
+  assert.equal(stats.task, 1);
+  assert.equal(stats.note, 1);
+});
+
+test('日记块为空时才退回全文（兜底路径）', () => {
+  assert.equal(toNoteBlock({ journal: '   ', answer: '- 要点', at: new Date(2026, 9, 7, 9, 5) }), '**AI 记录 · 09:05**\n\n- 要点');
+  assert.equal(toNoteBlock({ journal: '- 日记要点', answer: '- 全文要点', at: new Date(2026, 9, 7, 9, 5) }), '**AI 记录 · 09:05**\n\n- 日记要点');
+});

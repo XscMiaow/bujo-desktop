@@ -6,7 +6,8 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 
-const { SettingsService, PROVIDER_PRESETS } = require('../src/main/settings-service.js');
+const { SettingsService, PROVIDER_PRESETS, DEFAULT_SETTINGS, LEGACY_SYSTEM_PROMPTS } = require('../src/main/settings-service.js');
+const { buildSystemPrompt } = require('../src/shared/ai-reply.js');
 
 let tmpDir;
 let file;
@@ -98,6 +99,41 @@ test('接口地址必须是 http(s)，非法时拒绝保存', () => {
   assert.equal(result.ok, false);
   assert.match(result.error, /http/);
   assert.equal(service.getPublic().baseUrl, 'https://api.openai.com/v1', '拒绝后设置保持不变');
+});
+
+test('默认系统提示词只写角色，三段式协议由请求时追加', () => {
+  const service = makeService(fakeEncryptor, 'prompt.json');
+  const prompt = service.getPublic().systemPrompt;
+
+  assert.equal(prompt, DEFAULT_SETTINGS.systemPrompt);
+  assert.match(prompt, /子弹笔记/);
+  assert.ok(!prompt.includes('<journal>'), '默认提示词里不写死协议，避免和自动追加的内容重复');
+  // 提示词要描述现在真的会发生的分工：说给用户的 / 先看已有笔记再决定改还是新增
+  assert.match(prompt, /先看笔记/);
+  assert.match(prompt, /不要重复/);
+
+  const built = buildSystemPrompt(prompt);
+  assert.ok(built.startsWith(prompt));
+  assert.ok(built.includes('<chat>') && built.includes('<journal>') && built.includes('<note-edit>'));
+});
+
+test('旧版本的默认提示词会被自动升级，用户自己写的原样保留', () => {
+  for (const [index, legacy] of LEGACY_SYSTEM_PROMPTS.entries()) {
+    const service = makeService(fakeEncryptor, `legacy-${index}.json`);
+    service.save({ systemPrompt: legacy });
+    assert.equal(service.getPublic().systemPrompt, DEFAULT_SETTINGS.systemPrompt);
+    assert.equal(service.getForRequest().systemPrompt, DEFAULT_SETTINGS.systemPrompt, '真正发出去的也是新提示词');
+  }
+
+  const custom = '你是我的私人秘书，说话像朋友。';
+  const service = makeService(fakeEncryptor, 'custom-prompt.json');
+  service.save({ systemPrompt: custom });
+  assert.equal(service.getPublic().systemPrompt, custom, '用户改过的提示词不动');
+
+  const blank = makeService(fakeEncryptor, 'blank-prompt.json');
+  blank.save({ systemPrompt: '' });
+  assert.equal(blank.getPublic().systemPrompt, '', '清空就是清空，不偷偷塞回默认值');
+  assert.ok(buildSystemPrompt(blank.getForRequest().systemPrompt).includes('<journal>'), '清空后仍然带上格式约定');
 });
 
 test('设置文件损坏时退回默认值，不抛异常', () => {
