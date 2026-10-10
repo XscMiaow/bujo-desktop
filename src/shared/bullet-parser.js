@@ -8,6 +8,7 @@
  * 支持的子弹符号（同时兼容 Markdown 复选框写法）：
  *   - [ ] 待办任务        • text   / - [ ] text
  *   - [x] 已完成          - [x] text
+ *   - [-] 划去（不删原文） - [-] text
  *   - [>] 迁移            - [>] text
  *   - [<] 计划            - [<] text
  *   - [!] 优先            - [!] text
@@ -27,6 +28,7 @@
   var KINDS = {
     task: { glyph: '•', label: '任务', cls: 'is-task', symbol: '[ ]' },
     done: { glyph: '✕', label: '完成', cls: 'is-done', symbol: '[x]' },
+    cancelled: { glyph: '✗', label: '划去', cls: 'is-cancelled', symbol: '[-]' },
     migrated: { glyph: '›', label: '迁移', cls: 'is-migrated', symbol: '[>]' },
     scheduled: { glyph: '‹', label: '计划', cls: 'is-scheduled', symbol: '[<]' },
     priority: { glyph: '★', label: '优先', cls: 'is-priority', symbol: '[!]' },
@@ -38,10 +40,11 @@
     ' ': 'task',
     x: 'done',
     X: 'done',
+    // [-] 是「划去」：条目留在文件里，只是划掉（不真删）
+    '-': 'cancelled',
     '>': 'migrated',
     '<': 'scheduled',
     '!': 'priority',
-    '-': 'note',
     '*': 'priority'
   };
 
@@ -138,7 +141,8 @@
       var bullet = parseBulletLine(line);
       if (bullet) {
         flushMarkdown();
-        items.push(bullet);
+        // line：这一条在源文件里的行号（0 起）。界面靠它把操作写回正确的那一行
+        items.push({ kind: bullet.kind, text: bullet.text, indent: bullet.indent, line: i });
         continue;
       }
 
@@ -162,7 +166,7 @@
 
   /** 统计各类子弹数量，用于顶部的「今日进度」 */
   function countStats(blocks) {
-    var stats = { total: 0, task: 0, done: 0, note: 0, event: 0, migrated: 0, scheduled: 0, priority: 0 };
+    var stats = { total: 0, task: 0, done: 0, cancelled: 0, note: 0, event: 0, migrated: 0, scheduled: 0, priority: 0 };
     (blocks || []).forEach(function (block) {
       if (block.type !== 'bullets') return;
       block.items.forEach(function (item) {

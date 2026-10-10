@@ -6,7 +6,7 @@ const fs = require('node:fs/promises');
 const os = require('node:os');
 const path = require('node:path');
 
-const { appendToNote, readNote, integrateNoteFile, isInsideDirectory } = require('../src/main/note-service.js');
+const { appendToNote, readNote, integrateNoteFile, setBulletMark, locateBullet, isInsideDirectory } = require('../src/main/note-service.js');
 
 let tmpDir;
 
@@ -123,6 +123,91 @@ test('重复的一轮不会写文件（笔记没变化时不动磁盘）', async
 test('readNote 读不到就报错，不返回空字符串', async () => {
   await assert.rejects(() => readNote(path.join(tmpDir, 'nope.md')), /文件不存在/);
   await assert.rejects(() => readNote(path.join(tmpDir, 'x.exe')), /只能写入 Markdown/);
+});
+
+
+test('手工改标记：完成 / 划去 / 恢复，都只改那一行', async () => {
+  const file = path.join(tmpDir, 'marks.md');
+  await fs.writeFile(file, '# 笔记\n\n- [ ] 写周报\n- 整理收件箱\n  - [!] 子任务\n', 'utf8');
+
+  const done = await setBulletMark(file, { line: 2, text: '写周报', mark: 'x' });
+  assert.equal(done.changed, true);
+  assert.equal(done.state, 'done');
+  assert.equal(done.after, '- [x] 写周报');
+
+  const cancelled = await setBulletMark(file, { line: 3, text: '整理收件箱', mark: '-' });
+  assert.equal(cancelled.after, '- [-] 整理收件箱');
+
+  const restored = await setBulletMark(file, { line: 4, text: '子任务', mark: ' ' });
+  assert.equal(restored.after, '  - [ ] 子任务', '缩进保留');
+
+  const content = await fs.readFile(file, 'utf8');
+  assert.equal(
+    content,
+    ['# 笔记', '', '- [x] 写周报', '- [-] 整理收件箱', '  - [ ] 子任务', ''].join('\n'),
+    '一行都没删，只改了三处的标记'
+  );
+});
+
+
+test('已经是这个状态时不写文件，也不报成改过了', async () => {
+  const file = path.join(tmpDir, 'marks-same.md');
+  await fs.writeFile(file, '- [x] 写周报\n', 'utf8');
+  const before = await fs.stat(file);
+
+  const again = await setBulletMark(file, { line: 0, text: '写周报', mark: 'x' });
+  assert.equal(again.changed, false);
+  const after = await fs.stat(file);
+  assert.equal(after.mtimeMs, before.mtimeMs, '没有变化就不动磁盘');
+});
+
+
+test('行号偏了按内容找回；找不到或两条一样就拒绝，绝不乱改', async () => {
+  const file = path.join(tmpDir, 'marks-stale.md');
+  await fs.writeFile(file, '# 笔记\n\n- [ ] 写周报\n- 整理收件箱\n', 'utf8');
+
+  // 行号给错（文件在外部被改过），但内容对得上：找回来
+  const found = await setBulletMark(file, { line: 0, text: '整理收件箱', mark: '-' });
+  assert.equal(found.changed, true);
+  assert.equal(found.after, '- [-] 整理收件箱');
+
+  await assert.rejects(() => setBulletMark(file, { line: 1, text: '不存在的事', mark: 'x' }), /找不到这一条/);
+  await assert.rejects(() => setBulletMark(file, { line: 1, text: '写周报', mark: '?' }), /不支持的标记/);
+  await assert.rejects(() => setBulletMark(file, { line: 1, text: '  ', mark: 'x' }), /没有可比对的内容/);
+});
+
+
+test('两条一模一样的条目：宁可拒绝也不猜（返回明确错误）', async () => {
+  const file = path.join(tmpDir, 'marks-dup.md');
+  await fs.writeFile(file, '开头\n\n- [ ] 买牛奶\n\n- [ ] 买牛奶\n', 'utf8');
+
+  await assert.rejects(() => setBulletMark(file, { line: 1, text: '买牛奶', mark: 'x' }), /一样的条目/);
+  assert.equal(await fs.readFile(file, 'utf8'), '开头\n\n- [ ] 买牛奶\n\n- [ ] 买牛奶\n', '拒绝时文件完全不动');
+});
+
+
+test('段落、标题、空行都不是条目：不给它们打标记', async () => {
+  const file = path.join(tmpDir, 'marks-plain.md');
+  const original = '# 标题\n\n这是一段普通文字\n';
+  await fs.writeFile(file, original, 'utf8');
+
+  for (const target of [
+    { line: 2, text: '这是一段普通文字' },
+    { line: 0, text: '# 标题' },
+    { line: 1, text: '开头' }
+  ]) {
+    await assert.rejects(() => setBulletMark(file, { ...target, mark: 'x' }), /不是条目|找不到这一条/, JSON.stringify(target));
+  }
+
+  assert.equal(await fs.readFile(file, 'utf8'), original, '拒绝时一个字都不动');
+});
+
+
+test('locateBullet 只认条目行', () => {
+  const lines = ['# 标题', '- [ ] 写周报', '普通文字', 'o 开会'];
+  assert.equal(locateBullet(lines, '写周报'), 1);
+  assert.equal(locateBullet(lines, '开会'), 3, '事件也算条目');
+  assert.throws(() => locateBullet(lines, '普通文字'), /找不到这一条/);
 });
 
 

@@ -9,6 +9,7 @@
 
   --kind-task: #7aa2f7;
   --kind-done: #6dbf8b;
+  --kind-cancelled: #7c8499;
   --kind-migrated: #bb9af7;
   --kind-scheduled: #4fc1d6;
   --kind-priority: #e0af68;
@@ -407,6 +408,58 @@ body {
 .chat-journal.is-empty {
   border-left-color: #3a4054;
   background: #171a22;
+}
+
+/* 等待 AI 回复：占位卡片与「正在思考」气泡 */
+.chat-journal.is-pending .chat-journal-hint {
+  animation: chat-pending-pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes chat-pending-pulse {
+  0%,
+  100% {
+    opacity: 0.55;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+.chat-waiting {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin: 2px 0;
+  color: var(--text-dim);
+  font-size: 12.5px;
+}
+
+.chat-waiting-dot {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: var(--kind-task);
+  animation: chat-waiting-bounce 0.9s ease-in-out infinite;
+}
+
+@keyframes chat-waiting-bounce {
+  0%,
+  100% {
+    transform: translateY(-2px);
+    opacity: 0.6;
+  }
+  50% {
+    transform: translateY(2px);
+    opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .chat-journal.is-pending .chat-journal-hint,
+  .chat-waiting-dot {
+    animation: none;
+  }
 }
 
 .chat-journal-head {
@@ -948,6 +1001,53 @@ body {
   background: #1d21295b;
 }
 
+/* 条目右侧的手工操作：平时淡一点，鼠标移上去或键盘聚焦时才显眼 */
+.bujo-acts {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  opacity: 0.35;
+  transition: opacity 0.12s ease;
+}
+
+.bujo-entry:hover .bujo-acts,
+.bujo-acts:focus-within {
+  opacity: 1;
+}
+
+.bujo-act {
+  padding: 1px 6px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: #1b1e27;
+  color: var(--text-dim);
+  font: inherit;
+  font-size: 11px;
+  line-height: 1.5;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.bujo-act:hover:not(:disabled) {
+  border-color: #3d4459;
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+.bujo-act[data-act='done']:hover:not(:disabled) {
+  color: var(--kind-done);
+}
+
+.bujo-act[data-act='cancel']:hover:not(:disabled) {
+  color: var(--kind-cancelled);
+}
+
+.bujo-act:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
 .bujo-glyph {
   flex: none;
   width: 14px;
@@ -981,6 +1081,20 @@ body {
   color: var(--text-dim);
   text-decoration: line-through;
   text-decoration-color: #6dbf8b88;
+}
+
+.bujo-entry.is-cancelled {
+  border-left-color: #3d4353;
+}
+.bujo-entry.is-cancelled .bujo-glyph {
+  color: var(--kind-cancelled);
+}
+
+/* 划去：条目留在文件里，只是划掉 */
+.bujo-entry.is-cancelled .bujo-text {
+  color: #6b7280;
+  text-decoration: line-through;
+  text-decoration-color: #8d94a8aa;
 }
 
 .bujo-entry.is-migrated {
@@ -1022,6 +1136,33 @@ body {
 }
 .bujo-entry.is-note .bujo-glyph {
   color: var(--kind-note);
+}
+
+/* ---------- 一闪而过的结果提示 ---------- */
+
+.toast {
+  position: fixed;
+  right: 18px;
+  bottom: 46px;
+  z-index: 40;
+  max-width: 320px;
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--kind-done);
+  border-radius: 7px;
+  background: #1b1e27f2;
+  color: var(--text);
+  font-size: 12px;
+  line-height: 1.5;
+  opacity: 0;
+  transform: translateY(4px);
+  transition: opacity 0.15s ease, transform 0.15s ease;
+  pointer-events: none;
+}
+
+.toast.show {
+  opacity: 1;
+  transform: translateY(0);
 }
 
 /* ---------- 原文视图 ---------- */

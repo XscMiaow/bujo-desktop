@@ -14,6 +14,31 @@ test('识别 Markdown 复选框为对应的子弹类型', () => {
   assert.equal(parseBulletLine('- [>] 迁移').kind, 'migrated');
   assert.equal(parseBulletLine('- [<] 计划').kind, 'scheduled');
   assert.equal(parseBulletLine('- [!] 优先').kind, 'priority');
+  // 划去：条目还在，只是划掉（不是删除）
+  assert.equal(parseBulletLine('- [-] 不做了').kind, 'cancelled');
+  assert.equal(parseBulletLine('- [-] 不做了').text, '不做了', '正文照旧能读出来');
+});
+
+test('每个条目都带上它在源文件里的行号（界面靠它写回正确的那一行）', () => {
+  const source = ['# 标题', '', '- [ ] 一', '随便一句', '- [x] 二', '- [-] 三'].join('\n');
+  const { blocks } = parseDocument(source);
+  const items = blocks.filter((b) => b.type === 'bullets').flatMap((b) => b.items);
+
+  assert.deepEqual(
+    items.map((item) => ({ line: item.line, text: item.text })),
+    [
+      { line: 2, text: '一' },
+      { line: 4, text: '二' },
+      { line: 5, text: '三' }
+    ]
+  );
+});
+
+test('划去计入统计，但不影响完成进度', () => {
+  const { stats } = parseDocument(['- [ ] 一', '- [x] 二', '- [-] 三'].join('\n'));
+  assert.equal(stats.cancelled, 1);
+  assert.equal(stats.total, 3);
+  assert.equal(stats.progress, 50, '进度只看待办与完成');
 });
 
 test('普通列表项是笔记，原生符号是任务与事件', () => {
@@ -88,7 +113,7 @@ test('真实示例文件能解析出各类子弹', () => {
   assert.ok(blocks.some((b) => b.type === 'markdown' && b.text.includes('# 2026 年 10 月')), '标题被保留为 markdown 块');
   const items = blocks.filter((b) => b.type === 'bullets').flatMap((b) => b.items);
   const kinds = new Set(items.map((i) => i.kind));
-  ['task', 'done', 'migrated', 'scheduled', 'priority', 'note', 'event'].forEach((kind) => {
+  ['task', 'done', 'cancelled', 'migrated', 'scheduled', 'priority', 'note', 'event'].forEach((kind) => {
     assert.ok(kinds.has(kind), `示例文件缺少 ${kind} 类型`);
   });
   assert.equal(items.filter((i) => i.text.includes('代码块里的减号')).length, 0, '示例里的代码块不应产生子弹');

@@ -77,6 +77,14 @@ function draftKey(parsed) {
   return `${parsed.journal}|${parsed.edit}`;
 }
 
+/**
+ * 等待态：发出请求后还没收到任何回复内容。
+ * 此时气泡与草稿卡都应显示「等待中」，而不是提前跳出一张空的「没有要写入」卡片。
+ */
+function isPendingMessage(message) {
+  return Boolean(message.pending) && !(message.content || '').trim();
+}
+
 function parsedReply(message) {
   const content = message.content || '';
   if (message.parsedSource !== content) {
@@ -120,10 +128,11 @@ function renderJournalDraft(text) {
 
     const first = li.firstChild;
     if (first && first.nodeType === Node.TEXT_NODE) {
+      const glyphs = { x: '☑', X: '☑', '>': '»', '<': '‹', '!': '!', '-': '✗' };
       const stripped = first.textContent
         .replace(/^\s+/, '')
-        .replace(/^\[( |x|X|>|!)\]\s?/, (match, mark) => {
-          if (mark !== ' ') glyph = mark === 'x' || mark === 'X' ? '☑' : mark === '>' ? '»' : '!';
+        .replace(/^\[([ xX><!*-])\]\s?/, (match, mark) => {
+          if (mark !== ' ') glyph = glyphs[mark] || glyph;
           return '';
         });
       first.textContent = stripped.replace(/^\s+/, '');
@@ -140,8 +149,8 @@ function targetLabel() {
   return chatEls.target.value === 'daily' ? '记入：今天的日记' : '记入：当前笔记';
 }
 
-/** 改动指令 → 界面上显示的动词 */
-const EDIT_LABELS = { replace: '改写', done: '完成', remove: '删除' };
+/** 改动指令 → 界面上显示的动词（划去不删原文） */
+const EDIT_LABELS = { replace: '改写', done: '完成', cancel: '划去' };
 
 /**
  * 把改动指令列成一份可读的清单：
@@ -157,6 +166,7 @@ function renderEditList(message) {
   edits.forEach((edit) => {
     const row = document.createElement('div');
     row.className = `chat-edit-row is-${edit.kind}`;
+    if (edit.kind === 'cancel') row.title = '划掉这一条，原文保留在笔记里';
 
     const op = document.createElement('span');
     op.className = 'chat-edit-op';
@@ -215,6 +225,7 @@ function renderJournalCard(message) {
   const { edits, ignored } = parsedEdits(message);
   const adds = parsed.journal ? ChatToNote.toNoteLines({ journal: parsed.journal, answer: '' }).length : 0;
   const isFallback = !parsed.hasJournal && !parsed.hasEdit && !message.error;
+  const isPending = isPendingMessage(message);
 
   const card = document.createElement('div');
   card.className = 'chat-journal';
@@ -260,7 +271,11 @@ function renderJournalCard(message) {
 
   if (adds) body.innerHTML = renderJournalDraft(parsed.journal);
 
-  if (isFallback) {
+  if (isPending) {
+    // 还在等 AI 回复：占位卡片说明状态，绝不提前判「没有要写的内容」
+    card.classList.add('is-empty', 'is-pending');
+    hint.textContent = '等待 AI 回复…';
+  } else if (isFallback) {
     // 模型没按协议回答：只能用兜底按钮，而且在卡片上说明白
     card.classList.add('is-empty', 'is-fallback');
     hint.textContent = 'AI 没有给出独立的新增条目，写入会用全文要点；对话里的寒暄也会一起进去';
@@ -296,13 +311,16 @@ function renderJournalCard(message) {
       : 'AI 认为这轮没有需要写进笔记的内容';
   }
 
-  const copyBtn = document.createElement('button');
-  copyBtn.type = 'button';
-  copyBtn.className = 'btn tiny';
-  copyBtn.dataset.action = 'copy-draft';
-  copyBtn.textContent = '复制草稿';
-
-  tools.append(copyBtn, status);
+  // 等待态还没有草稿可复制，暂时干出「复制草稿」按钮
+  if (!isPending) {
+    const copyBtn = document.createElement('button');
+    copyBtn.type = 'button';
+    copyBtn.className = 'btn tiny';
+    copyBtn.dataset.action = 'copy-draft';
+    copyBtn.textContent = '复制草稿';
+    tools.append(copyBtn);
+  }
+  tools.append(status);
   parts.push(hint, preview, tools);
   card.append(...parts);
 
@@ -381,7 +399,7 @@ function contextRequest() {
 
 function renderChatMessage(message) {
   const li = document.createElement('li');
-  li.className = `chat-msg ${message.role === 'user' ? 'from-user' : 'from-ai'}${message.error ? ' is-error' : ''}`;
+  li.className = `chat-msg ${message.role === 'user' ? 'from-user' : 'from-ai'}${message.error ? ' is-error' : ''}${isPendingMessage(message) ? ' is-pending' : ''}`;
 
   const role = document.createElement('div');
   role.className = 'chat-role';
@@ -389,7 +407,10 @@ function renderChatMessage(message) {
 
   const body = document.createElement('div');
   body.className = 'chat-body';
-  if (message.role === 'user') {
+  if (isPendingMessage(message)) {
+    // 等待 AI 回复：先给个「正在思考…」的占位，收到内容后立刻被替换
+    body.innerHTML = '<p class="chat-waiting"><span class="chat-waiting-dot"></span>正在思考…</p>';
+  } else if (message.role === 'user') {
     body.textContent = message.content;
   } else if (message.error) {
     body.textContent = message.content;
@@ -406,17 +427,20 @@ function renderChatMessage(message) {
   if (message.role === 'assistant' && !message.error) {
     li.append(renderJournalCard(message));
 
-    const tools = document.createElement('div');
-    tools.className = 'chat-tools';
+    // 等待态没有可复制的内容，先不给工具条
+    if (!isPendingMessage(message)) {
+      const tools = document.createElement('div');
+      tools.className = 'chat-tools';
 
-    const copyBtn = document.createElement('button');
-    copyBtn.type = 'button';
-    copyBtn.className = 'btn tiny';
-    copyBtn.dataset.action = 'copy';
-    copyBtn.textContent = '复制对话';
+      const copyBtn = document.createElement('button');
+      copyBtn.type = 'button';
+      copyBtn.className = 'btn tiny';
+      copyBtn.dataset.action = 'copy';
+      copyBtn.textContent = '复制对话';
 
-    tools.append(copyBtn);
-    li.append(tools);
+      tools.append(copyBtn);
+      li.append(tools);
+    }
   }
 
   message.element = li;
@@ -442,6 +466,12 @@ function scheduleAssistantRender(message) {
   requestAnimationFrame(() => {
     chatState.pendingRender = false;
     if (!message.element) return;
+    // 收到内容后不再是等待态。等待痕迹要看 DOM（li 上的 is-pending），
+    // 不能用 isPendingMessage() 判断：delta 处理器已把 message.pending 置 false，
+    // 首个增量时它恒为 false，等状样式与工具条的恢复就永远不会发生。
+    const wasPending = message.element.classList.contains('is-pending');
+    message.pending = false;
+    message.element.classList.remove('is-pending');
     const parsed = parsedReply(message);
 
     const body = message.element.querySelector('.chat-body');
@@ -451,10 +481,21 @@ function scheduleAssistantRender(message) {
         : '<p class="chat-body-dim">（这条回答只有日记内容）</p>';
     }
 
-    // 草稿内容变了才重建卡片，避免把卡片上的勾选状态冲掉
+    // 首个增量到了：把等待占位换成真实的草稿卡（或兜底卡的说明），并补上工具条
     const card = message.element.querySelector('.chat-journal');
-    if (card && message.renderedJournal !== draftKey(parsed)) {
+    if (card && (wasPending || message.renderedJournal !== draftKey(parsed))) {
       card.replaceWith(renderJournalCard(message));
+    }
+    if (wasPending && !message.element.querySelector('.chat-tools')) {
+      const tools = document.createElement('div');
+      tools.className = 'chat-tools';
+      const copyBtn = document.createElement('button');
+      copyBtn.type = 'button';
+      copyBtn.className = 'btn tiny';
+      copyBtn.dataset.action = 'copy';
+      copyBtn.textContent = '复制对话';
+      tools.append(copyBtn);
+      message.element.querySelector('.chat-journal').after(tools);
     }
 
     scrollChatToBottom();
@@ -492,7 +533,8 @@ async function sendMessage(text) {
 
   chatEls.input.value = '';
   appendMessage({ role: 'user', content: question });
-  const assistant = appendMessage({ role: 'assistant', content: '' });
+  // pending：AI 回复前先显示「正在思考…」与等待中的草稿卡，不提前跳出空卡片
+  const assistant = appendMessage({ role: 'assistant', content: '', pending: true });
 
   const requestId = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
   chatState.requestId = requestId;
@@ -524,6 +566,8 @@ async function sendMessage(text) {
     assistant.error = true;
     assistant.content = (result && result.error) || '请求失败';
   }
+  // 无论结果是什么，等待态到此结束
+  assistant.pending = false;
 
   // 重新画这一条（去掉工具条 / 显示错误样式）
   if (assistant.element) {
@@ -761,6 +805,7 @@ window.bujo.onChatDelta(({ requestId, text }) => {
   const assistant = chatState.messages[chatState.messages.length - 1];
   if (!assistant || assistant.role !== 'assistant') return;
   assistant.content = (assistant.content || '') + text;
+  assistant.pending = false;
   scheduleAssistantRender(assistant);
 });
 
@@ -803,7 +848,27 @@ window.__bujoSmokeTestChat = async (expectReply) => {
 
   setChatOpen(true);
   chatEls.input.value = '帮我列出今天的重点';
+
+  // 等待态检查不能靠提交后轮询（mock 模型可能快到首个 delta 在下一拍就到），
+  // 改成同步检查：requestSubmit 同步触发 sendMessage，等待 UI 在它让出事件循环前就已画好
+  let pendingObserved = false;
+  let cardStateDuringPending = '';
+  const liBeforeSend = () => chatEls.messages.querySelectorAll('.chat-msg').length;
+  const bubbleCountBefore = liBeforeSend();
   chatEls.form.requestSubmit();
+
+  // sendMessage 同步走到第一个 await 之前已把等待 UI 画好（appendMessage 是同步的），
+  // 这里紧接着同步检查 DOM，不存在时序窗口
+  if (chatEls.messages.querySelectorAll('.chat-msg').length === bubbleCountBefore + 2) {
+    const waitBubble = chatEls.messages.querySelector('.chat-msg.is-pending .chat-waiting');
+    const pendingCard = chatEls.messages.querySelector('.chat-journal.is-pending .chat-journal-hint');
+    if (waitBubble) pendingObserved = true;
+    if (pendingCard) {
+      cardStateDuringPending = (pendingCard.textContent || '').trim();
+      // 占位卡绝不能提前报「没有要写的内容」
+      if (/没有需要写进笔记的内容/.test(cardStateDuringPending)) pendingObserved = false;
+    }
+  }
 
   const deadline = Date.now() + 8000;
   while (chatState.streaming && Date.now() < deadline) {
@@ -874,6 +939,7 @@ window.__bujoSmokeTestChat = async (expectReply) => {
       editsShown &&
       dedupePreviewed &&
       contextSent &&
+      pendingObserved &&
       summaryReported &&
       Boolean(noteResult) &&
       !noteResult.includes('失败'),
@@ -886,6 +952,8 @@ window.__bujoSmokeTestChat = async (expectReply) => {
     journalCardLaidOut,
     editsShown,
     editOps: editOps.map((edit) => `${edit.kind}: ${edit.target}${edit.next ? ` => ${edit.next}` : ''}`),
+    pendingObserved,
+    cardStateDuringPending,
     dedupePreviewed,
     preview: previewText,
     context: assistant && assistant.context,

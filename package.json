@@ -2,12 +2,16 @@
   "name": "bujo-desktop",
   "version": "0.1.0",
   "private": true,
-  "description": "子弹笔记（Bullet Journal）桌面应用：记录笔记并读取 .md 文件",
+  "description": "子弹笔记（Bullet Journal）桌面应用：记录笔记并读取 .md 文件，附 CLI 操作接口",
   "main": "src/main/main.js",
   "scripts": {
     "start": "electron .",
     "test": "node --test",
-    "smoke": "electron . --smoke-test"
+    "smoke": "electron . --smoke-test",
+    "cli": "node bin/bujo-cli.js"
+  },
+  "bin": {
+    "bujo": "bin/bujo-cli.js"
   },
   "keywords": [
     "electron",

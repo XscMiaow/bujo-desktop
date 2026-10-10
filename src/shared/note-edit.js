@@ -2,11 +2,14 @@
  * 「笔记改动」指令 + 把 AI 的新增条目整合进已有笔记（浏览器与 Node 共用）。
  *
  * 分工：
- *   - parseEditBlock()：解析 <note-edit> 段里的改动指令（改 / 完成 / 删）
+ *   - parseEditBlock()：解析 <note-edit> 段里的改动指令（改 / 完成 / 划去）
  *   - integrate()：把改动与新增条目合并进现有笔记文本，并顺手做整合：
  *       * 与已有条目重复的新增条目不再写一遍（报给界面看）
  *       * 同一件事只是状态变了（待办 → 已完成等）就地改状态，不新增一条
  *       * 一行一条，改的是原行，其它内容原样保留
+ *
+ * 「删除」在这个应用里就是「划去」：条目留在文件里，只把标记改成 [-]，
+ * 任何时候都不会有一行内容被默默删掉。
  *
  * 纯函数，不碰文件系统：主进程用它真正落盘，渲染层用它做写入前的预览，
  * 两边走同一套规则，界面上的数字和文件里的结果就不会对不上。
@@ -25,12 +28,15 @@
   const RULE_RE = /^\s*(?:-{3,}|\*{3,}|_{3,})\s*$/;
   const LIST_PREFIX_RE = /^\s*(?:[-*+]|\d+[.)])\s+/;
   const CHECKBOX_RE = /^\s*[-*+]?\s*\[([ xX><!*-])\]\s*(.*)$/;
+  const NATIVE_RE = /^\s*[•·○]\s+/;
+  const EVENT_RE = /^\s*[oO][ \t]+(?=\S)/;
 
   // 改写写法：改：旧 => 新（也认 ~、→、->）
   const REPLACE_SEP = /(?:=>|⇒|→|->)/;
   const REPLACE_PREFIX = /^(?:~|改|更新|修改|调整)\s*[:：]?\s*/;
   const DONE_PREFIX = /^(?:[xX✓☑]|完成|已完成|搞定)(?:\s*[:：]\s*|\s+)/;
-  const REMOVE_PREFIX = /^(?:删|删除|移除|去掉)\s*[:：]?\s*/;
+  // 划去（保留原文）；「删」这类要求也按划去处理，不会真删掉一行
+  const CANCEL_PREFIX = /^(?:划去|划掉|删|删除|移除|去掉)\s*[:：]?\s*/;
 
   /** 新增条目与已有条目「算同一件事」的相似度门槛 */
   const DUPLICATE_THRESHOLD = 0.86;
@@ -111,11 +117,44 @@
     return `${indent || ''}- ${marker}${body}`.trimEnd();
   }
 
-  /** 把一条已有条目标成已完成 */
-  function markDone(line, indent) {
+  /** 去掉列表符号与复选框，只留正文 */
+  function bulletBody(line) {
+    return asBulletLine(line, '')
+      .replace(/^- (?:\[[ xX><!*-]\]\s*)?/, '')
+      .replace(EVENT_RE, '')
+      .trim();
+  }
+
+  /** 这一行是不是「条目」：只有条目能被标记，段落与标题不动 */
+  function isBulletLine(line) {
+    const text = String(line == null ? '' : line);
+    return LIST_PREFIX_RE.test(text) || NATIVE_RE.test(text) || EVENT_RE.test(text);
+  }
+
+  /**
+   * 改写一条条目的标记，保留缩进与正文：
+   *   ' ' 待办 / 'x' 完成 / '-' 划去
+   */
+  function setMark(line, mark) {
     const box = boxParts(line);
-    if (box) return `${box.indent}- [x] ${box.text}`.trimEnd();
-    return asBulletLine(line, indent || (/^\s*/.exec(line) || [''])[0]).replace(/^(\s*)- /, '$1- [x] ');
+    const indent = box ? box.indent : (/^\s*/.exec(String(line == null ? '' : line)) || [''])[0];
+    const body = bulletBody(line);
+    if (!body) return '';
+    return `${indent}- [${mark}] ${body}`.trimEnd();
+  }
+
+  function markTask(line) {
+    return setMark(line, ' ');
+  }
+
+  /** 标记完成 */
+  function markDone(line) {
+    return setMark(line, 'x');
+  }
+
+  /** 划去：条目留在文件里，只是划掉 */
+  function markCancelled(line) {
+    return setMark(line, '-');
   }
 
   /**
@@ -170,10 +209,10 @@
         continue;
       }
 
-      const remove = REMOVE_PREFIX.exec(body);
-      if (remove) {
-        const target = body.slice(remove[0].length).trim();
-        if (target) edits.push({ kind: 'remove', target, raw: line.trim() });
+      const cancel = CANCEL_PREFIX.exec(body);
+      if (cancel) {
+        const target = body.slice(cancel[0].length).trim();
+        if (target) edits.push({ kind: 'cancel', target, raw: line.trim() });
         else ignored.push(line.trim());
         continue;
       }
@@ -188,7 +227,7 @@
    * 在一份（可能已被改动过的）行数组里找指令指向的那一行。
    * @returns {{ index:number, score:number, how:string } | null}
    */
-  function findTargetLine(lines, target, isTaken) {
+  function findTargetLine(lines, target) {
     const needle = normalizeForMatch(target);
     if (!needle) return null;
 
@@ -197,7 +236,6 @@
     let runnerUp = 0;
 
     lines.forEach((line, index) => {
-      if (line === null || (isTaken && isTaken(index))) return;
       if (!line.trim() || HEADING_RE.test(line) || RULE_RE.test(line)) return;
       const score = matchScore(needle, normalizeForMatch(line));
       if (score === 1 && !exact) exact = { index, score, how: '完全相同' };
@@ -217,7 +255,7 @@
   }
 
   /** 新增条目能不能并进已有条目（同一件事，只是状态变了） */
-  function findMergeCandidate(lines, line, isTaken) {
+  function findMergeCandidate(lines, line) {
     const incoming = boxParts(line);
     if (!incoming || incoming.mark === ' ') return null;
     const incomingText = normalizeForMatch(incoming.text);
@@ -225,7 +263,6 @@
 
     for (let index = 0; index < lines.length; index++) {
       const existing = lines[index];
-      if (existing === null || (isTaken && isTaken(index))) continue;
       const box = boxParts(existing);
       if (!box || box.mark === incoming.mark) continue;
       const score = matchScore(incomingText, normalizeForMatch(box.text));
@@ -241,7 +278,7 @@
     const needle = normalizeForMatch(line);
     if (!needle) return null;
 
-    const pool = lines.filter((item) => item !== null && item.trim()).concat(accepted);
+    const pool = lines.filter((item) => item.trim()).concat(accepted);
     let best = null;
     for (const other of pool) {
       if (HEADING_RE.test(other) || RULE_RE.test(other)) continue;
@@ -273,10 +310,6 @@
     const source = typeof existingText === 'string' ? existingText.replace(/\r\n?/g, '\n') : '';
     const original = source.replace(/\s+$/, '');
     const work = original ? original.split('\n') : [];
-
-    let removedCount = 0;
-    const removed = new Set();
-    const isRemoved = (index) => removed.has(index);
     const report = {
       mode: 'append',
       // applied 是真的改动了；unchanged 是「指令对上了但内容已经是最新」（例如已经是已完成）
@@ -295,18 +328,16 @@
     };
 
     for (const edit of edits) {
-      const hit = findTargetLine(work, edit.target, isRemoved);
+      const hit = findTargetLine(work, edit.target);
       if (!hit) {
         report.edits.skipped.push({ kind: edit.kind, target: edit.target, reason: '笔记里没找到对应的条目' });
         continue;
       }
 
       const before = work[hit.index];
-      if (edit.kind === 'remove') {
-        removed.add(hit.index);
-        work[hit.index] = null;
-        removedCount += 1;
-        report.edits.applied.push({ kind: 'remove', from: before, to: '', how: hit.how });
+      // 只动「条目」，段落与标题不动
+      if (!isBulletLine(before)) {
+        report.edits.skipped.push({ kind: edit.kind, target: edit.target, reason: '这一行不是条目，没有改它' });
         continue;
       }
 
@@ -314,6 +345,13 @@
         const after = markDone(before);
         work[hit.index] = after;
         recordEdit('done', before, after, hit.how);
+        continue;
+      }
+
+      if (edit.kind === 'cancel') {
+        const after = markCancelled(before);
+        work[hit.index] = after;
+        recordEdit('cancel', before, after, hit.how);
         continue;
       }
 
@@ -342,7 +380,7 @@
         continue;
       }
 
-      const merge = findMergeCandidate(work, line, isRemoved);
+      const merge = findMergeCandidate(work, line);
       if (merge) {
         work[merge.index] = merge.line;
         report.merged.push({ line: line.trim(), before: merge.before, after: merge.line, matched: merge.text });
@@ -362,10 +400,8 @@
     report.mode = report.edits.applied.length && accepted.length ? 'mixed' : report.edits.applied.length ? 'edits' : 'append';
     report.changed = Boolean(report.edits.applied.length || accepted.length || report.merged.length);
 
-    let text = work.filter((line) => line !== null).join('\n');
-    // 删行可能留下多余空行，只在真的删过的时候收拾一下
-    if (removedCount) text = text.replace(/\n{3,}/g, '\n\n');
-    text = text.replace(/\s+$/, '');
+    // 一行都不会被删掉：划去只是把标记改成 [-]
+    let text = work.join('\n').replace(/\s+$/, '');
 
     // 没有新增条目就不追加任何东西：时间戳只在真的有内容时才写
     const block = accepted.length
@@ -386,7 +422,12 @@
     matchScore,
     boxParts,
     asBulletLine,
+    bulletBody,
+    isBulletLine,
+    setMark,
+    markTask,
     markDone,
+    markCancelled,
     DUPLICATE_THRESHOLD,
     MATCH_THRESHOLD
   };

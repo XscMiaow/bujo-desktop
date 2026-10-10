@@ -174,7 +174,9 @@ test('协议里写明了三段式标签、改动写法与参考笔记的规则',
   // 改动指令的三个写法必须与 note-edit 的解析规则一致
   assert.match(PROTOCOL_PROMPT, /改：.*=>/);
   assert.match(PROTOCOL_PROMPT, /完成：/);
-  assert.match(PROTOCOL_PROMPT, /删：/);
+  assert.match(PROTOCOL_PROMPT, /划去：.*不会删掉原文/);
+  // 划去是补列出的新符号之一，得和 bullet-parser 的 [- ] 对应
+  assert.ok(PROTOCOL_PROMPT.includes('- [-] '), '协议里要教模型写划去的条目');
   // 上下文与整合要求
   assert.match(PROTOCOL_PROMPT, /<note file=/);
   assert.match(PROTOCOL_PROMPT, /同一件事不要重复记一条/);

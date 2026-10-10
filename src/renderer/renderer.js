@@ -20,6 +20,7 @@ const els = {
   note: document.getElementById('note'),
   legend: document.getElementById('legend'),
   dropOverlay: document.getElementById('drop-overlay'),
+  toast: document.getElementById('toast'),
   content: document.getElementById('content'),
   sidebar: document.getElementById('sidebar'),
   sidebarToggle: document.getElementById('sidebar-toggle'),
@@ -43,7 +44,7 @@ const state = {
 
 function renderLegend() {
   const kinds = Bujo.KINDS;
-  const order = ['task', 'done', 'migrated', 'scheduled', 'priority', 'note', 'event'];
+  const order = ['task', 'done', 'cancelled', 'migrated', 'scheduled', 'priority', 'note', 'event'];
 
   els.legend.innerHTML = order
     .map((key) => {
@@ -79,6 +80,7 @@ function renderStats(stats) {
   const chips = [];
   if (stats.task) chips.push(`<span class="chip">待办 ${stats.task}</span>`);
   if (stats.done) chips.push(`<span class="chip">完成 ${stats.done}</span>`);
+  if (stats.cancelled) chips.push(`<span class="chip">划去 ${stats.cancelled}</span>`);
   if (stats.priority) chips.push(`<span class="chip">优先 ${stats.priority}</span>`);
   if (stats.event) chips.push(`<span class="chip">事件 ${stats.event}</span>`);
   if (stats.migrated) chips.push(`<span class="chip">迁移 ${stats.migrated}</span>`);
@@ -87,6 +89,43 @@ function renderStats(stats) {
     `<span class="chip">进度 ${stats.progress}%</span><span class="progress"><span style="width:${stats.progress}%"></span></span>`
   );
   els.stats.innerHTML = chips.join('');
+}
+
+/** 能「完成」的条目类型 */
+const TASK_LIKE = new Set(['task', 'priority', 'scheduled', 'migrated']);
+
+/** 条目右侧的一个小操作按钮 */
+function entryAction(act, label, title) {
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.className = 'bujo-act';
+  button.dataset.act = act;
+  button.textContent = label;
+  button.title = title;
+  return button;
+}
+
+/**
+ * 手工操作：待办可以「完成」或「划去」；已完成的可以「取消完成」或「划去」；
+ * 已经划去的可以「恢复为待办」。划去只改标记，原文一直留在文件里。
+ */
+function buildEntryActions(item) {
+  const acts = document.createElement('span');
+  acts.className = 'bujo-acts';
+
+  if (item.kind === 'done') {
+    acts.append(entryAction('restore', '取消完成', '改回待办'));
+  } else if (item.kind === 'cancelled') {
+    acts.append(entryAction('restore', '恢复', '恢复为待办'));
+  } else if (TASK_LIKE.has(item.kind)) {
+    acts.append(entryAction('done', '完成', '标记为已完成'));
+  }
+
+  if (item.kind !== 'cancelled') {
+    acts.append(entryAction('cancel', '划去', '划去这一条（原文保留在笔记里）'));
+  }
+
+  return acts;
 }
 
 /** 一个子弹列表 → <ul>，符号由「子弹类型」决定，而不是原始文本 */
@@ -99,6 +138,9 @@ function buildBulletList(block) {
     const li = document.createElement('li');
     li.className = `bujo-entry ${meta.cls}`;
     li.dataset.kind = item.kind;
+    // 行号与正文：改标记时靠它们精准找到文件里的那一行
+    li.dataset.line = String(item.line);
+    li.dataset.text = item.text;
 
     // 缩进映射成固定步长，层级太深也不会跑出屏幕
     const indentPx = Math.min(item.indent, 12) * 6;
@@ -113,7 +155,7 @@ function buildBulletList(block) {
     text.className = 'bujo-text';
     text.innerHTML = marked.parseInline(item.text);
 
-    li.append(glyph, text);
+    li.append(glyph, text, buildEntryActions(item));
     ul.append(li);
   });
 
@@ -250,6 +292,66 @@ function clearError() {
   els.error.textContent = '';
 }
 
+/* ---------------- 手工改条目状态 ---------------- */
+
+/** 按钮上的动作 → 写进文件的标记 */
+const ACT_MARKS = { done: 'x', cancel: '-', restore: ' ' };
+const STATE_LABELS = { task: '待办', done: '已完成', cancelled: '已划去（原文保留）' };
+
+let toastTimer = null;
+
+/** 一闪而过的结果提示（右下角），不打断阅读 */
+function showToast(message) {
+  if (!els.toast) return;
+  els.toast.textContent = message;
+  els.toast.hidden = false;
+  els.toast.classList.add('show');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => {
+    els.toast.classList.remove('show');
+    els.toast.hidden = true;
+  }, 2600);
+}
+
+/**
+ * 点条目上的「完成 / 划去 / 恢复」：把这一条的行号与正文交给主进程，
+ * 主进程重新读文件、核对内容后再改那一行的标记，然后界面整篇重新载入。
+ */
+async function applyBulletAction(act) {
+  const entry = act.closest('.bujo-entry');
+  const mark = ACT_MARKS[act.dataset.act];
+  if (!entry || !mark || !state.file) return;
+
+  const buttons = [...entry.querySelectorAll('.bujo-act')];
+  buttons.forEach((button) => {
+    button.disabled = true;
+  });
+
+  const result = await window.bujo.setBulletMark({
+    filePath: state.file.path,
+    line: Number(entry.dataset.line),
+    text: entry.dataset.text || '',
+    mark
+  });
+
+  if (!result || !result.ok) {
+    buttons.forEach((button) => {
+      button.disabled = false;
+    });
+    showError(`改不了这一条：${(result && result.error) || '未知错误'}`);
+    return;
+  }
+
+  clearError();
+  const label = STATE_LABELS[result.state] || result.state;
+  showToast(result.changed ? `已标记为${label}` : `这一条已经是${label}`);
+
+  // 重新解析整篇：符号、统计、行号都跟着更新（保持滚动位置，别把视线顶回页首）
+  const scrollTop = els.content.scrollTop;
+  await loadFile(state.file.path);
+  els.content.scrollTop = scrollTop;
+}
+
 async function loadFile(filePath) {
   const result = await window.bujo.readFile(filePath);
   if (!result || !result.ok) {
@@ -334,8 +436,15 @@ document.addEventListener('keydown', (event) => {
   }
 });
 
-// 笔记里的外链交给系统浏览器
-els.note.addEventListener('click', (event) => {
+// 条目上的操作按钮（完成 / 划去 / 恢复）优先，其次是笔记里的外链
+els.note.addEventListener('click', async (event) => {
+  const act = event.target.closest('.bujo-act');
+  if (act) {
+    event.preventDefault();
+    await applyBulletAction(act);
+    return;
+  }
+
   const anchor = event.target.closest('a[href]');
   if (!anchor) return;
   event.preventDefault();
@@ -428,6 +537,9 @@ window.__bujoSmokeTest = async (filePath) => {
   els.sidebar.style.transition = previousTransition;
 
   const switched = Boolean(afterSidebarOpen) && (initialWasFirstItem || afterSidebarOpen.file !== before.file);
+  // 双击打开的那一篇真的渲染出来了：至少有一个块，条目数与统计一致。
+  // 不能要求「一定有子弹条目」：今天刚建的日记是个空模板，那样断言会看环境翻脸。
+  const rendered = Boolean(afterSidebarOpen) && afterSidebarOpen.blocks > 0 && afterSidebarOpen.entries === afterSidebarOpen.stats.total;
 
   return {
     ok:
@@ -435,7 +547,7 @@ window.__bujoSmokeTest = async (filePath) => {
       document.querySelectorAll('.md-block').length > 0 &&
       sidebarItems.length > 0 &&
       switched &&
-      afterSidebarOpen.entries > 0 &&
+      rendered &&
       samePath(activePath, firstPath) &&
       collapsedWidth < expandedWidth &&
       listHidden &&
@@ -448,10 +560,100 @@ window.__bujoSmokeTest = async (filePath) => {
       names: sidebarItems.map((li) => li.querySelector('.journal-name').textContent),
       openedByDoubleClick: afterSidebarOpen && afterSidebarOpen.file,
       switched,
+      rendered,
       activeHighlighted: Boolean(activePath)
     },
     afterSidebarOpen,
     collapse: { collapsedWidth, expandedWidth, listHidden, refreshHiddenWhenCollapsed, refreshVisibleWhenExpanded }
+  };
+};
+
+/** 自检用：找正文匹配的条目（重载后 DOM 会重建，所以每次都重新查） */
+function findEntryByText(needle) {
+  return [...document.querySelectorAll('.bujo-entry')].find((el) => el.dataset.text === needle) || null;
+}
+
+/** 自检用：等条目变成期望的状态 */
+async function waitEntryKind(text, kind, timeout = 3000) {
+  const deadline = Date.now() + timeout;
+  let seen = null;
+  while (Date.now() < deadline) {
+    const entry = findEntryByText(text);
+    seen = entry ? entry.dataset.kind : null;
+    if (seen === kind) return { ok: true, kind: seen };
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  return { ok: false, kind: seen };
+}
+
+/**
+ * 自检入口 3：真的去点条目上的「完成 / 划去 / 恢复」，验证写回文件的那一行。
+ * 线序：待办 → 完成；普通笔记 → 划去；待办 → 划去 → 恢复；已划去的只能恢复。
+ */
+window.__bujoSmokeTestMarks = async () => {
+  const steps = [];
+
+  async function step(text, act, expectKind) {
+    const entry = findEntryByText(text);
+    const button = entry && entry.querySelector(`.bujo-act[data-act="${act}"]`);
+    if (!button) {
+      steps.push({ text, act, button: false, ok: false });
+      return null;
+    }
+    button.click();
+    const waited = await waitEntryKind(text, expectKind);
+    steps.push({ text, act, button: true, expectKind, gotKind: waited.kind, ok: waited.ok });
+    return findEntryByText(text);
+  }
+
+  await step('先写周报', 'done', 'done');
+  await step('整理收件箱', 'cancel', 'cancelled');
+  await step('买牛奶', 'cancel', 'cancelled');
+  await step('买牛奶', 'restore', 'task');
+
+  // 已经划去的条目：只给「恢复」，不给「划去」
+  const already = findEntryByText('已经划去的老条目');
+  const alreadyActs = already ? [...already.querySelectorAll('.bujo-act')].map((b) => b.dataset.act) : [];
+
+  // 每个状态的条目各有哪些按钮，逐一记下来供人工核对
+  const inventory = [...document.querySelectorAll('.bujo-entry')].map((el) => ({
+    text: el.dataset.text,
+    kind: el.dataset.kind,
+    line: el.dataset.line,
+    acts: [...el.querySelectorAll('.bujo-act')].map((b) => b.dataset.act)
+  }));
+
+  // 按钮不是「存在就行」：得真的排版出来、并且在窗口里看得见
+  const layout = [...document.querySelectorAll('.bujo-entry')].map((el) => {
+    const acts = el.querySelector('.bujo-acts');
+    const buttons = [...el.querySelectorAll('.bujo-act')];
+    return {
+      text: el.dataset.text,
+      actsOpacity: acts ? Number(getComputedStyle(acts).opacity) : 0,
+      boxes: buttons.map((button) => {
+        const box = button.getBoundingClientRect();
+        return `${Math.round(box.width)}x${Math.round(box.height)}`;
+      }),
+      visible: buttons.length > 0 && buttons.every((button) => {
+        const box = button.getBoundingClientRect();
+        return box.width > 12 && box.height > 8 && box.right <= window.innerWidth + 1 && box.left >= 0;
+      })
+    };
+  });
+  const layoutOk = layout.length > 0 && layout.every((item) => item.visible && item.actsOpacity > 0);
+  const toastText = (els.toast && els.toast.textContent) || '';
+  const toastShown = Boolean(toastText) && !els.toast.hidden;
+
+  return {
+    ok: steps.every((item) => item.ok) && alreadyActs.join(',') === 'restore' && layoutOk && toastShown,
+    steps,
+    alreadyActs,
+    inventory,
+    layout,
+    layoutOk,
+    toast: toastText,
+    toastShown,
+    entries: inventory.length
   };
 };
 

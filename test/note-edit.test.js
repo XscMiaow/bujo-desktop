@@ -10,7 +10,11 @@ const {
   similarity,
   matchScore,
   asBulletLine,
-  markDone
+  isBulletLine,
+  setMark,
+  markTask,
+  markDone,
+  markCancelled
 } = require('../src/shared/note-edit.js');
 const { toBulletLines, toNoteHeader, toNoteLines } = require('../src/shared/chat-to-note.js');
 const { parseDocument } = require('../src/shared/bullet-parser.js');
@@ -30,7 +34,7 @@ const NOTE = [
 
 /* ---------------- 指令解析 ---------------- */
 
-test('改动指令：改 / 完成 / 删 三种写法都认，模型加的列表符号会剥掉', () => {
+test('改动指令：改 / 完成 / 划去 三种写法都认，模型加的列表符号会剥掉', () => {
   const { edits, ignored } = parseEditBlock(
     ['改：整理收件箱 => 整理收件箱和邮件', '- 完成：写周报', '* 删：下午三点跟产品对预算', '- [>] 改：写周报 => 周五交周报'].join('\n')
   );
@@ -41,7 +45,8 @@ test('改动指令：改 / 完成 / 删 三种写法都认，模型加的列表�
     [
       { kind: 'replace', target: '整理收件箱', next: '整理收件箱和邮件' },
       { kind: 'done', target: '写周报', next: undefined },
-      { kind: 'remove', target: '下午三点跟产品对预算', next: undefined },
+      // 「删」在应用里就是划去：原文留在文件里
+      { kind: 'cancel', target: '下午三点跟产品对预算', next: undefined },
       { kind: 'replace', target: '写周报', next: '周五交周报' }
     ]
   );
@@ -107,7 +112,7 @@ test('改动改的是已有那一行：另加一条不算数，其它内容原�
   assert.ok(!text.includes('**AI 记录'), '没有新增条目就不写时间戳（header 只在真的有新增时才用）');
 });
 
-test('完成指令：待办就地变已完成，普通笔记条目会被补上复选框', () => {
+test('完成指令：待办就地变已完成，普通笔记条目会补上复选框', () => {
   const doneTask = integrate(NOTE, { edits: parseEditBlock('完成：写周报').edits, lines: [] });
   assert.ok(doneTask.text.includes('- [x] 写周报'));
 
@@ -121,12 +126,49 @@ test('完成指令：待办就地变已完成，普通笔记条目会被补上�
   assert.equal(stats.note, 2, '收件箱与笔记区那两条照旧');
 });
 
-test('删除指令：整行删掉，并收拾掉多余空行', () => {
-  const { text, report } = integrate(NOTE, { edits: parseEditBlock('删：下午三点跟产品对预算').edits, lines: [] });
+test('划去指令：条目留在文件里，只把标记改成 [-]', () => {
+  const { text, report } = integrate(NOTE, { edits: parseEditBlock('划去：下午三点跟产品对预算').edits, lines: [] });
+
   assert.equal(report.edits.applied.length, 1);
-  assert.ok(!text.includes('下午三点跟产品对预算'));
-  assert.ok(!/\n{3,}/.test(text), '不留下连续空行');
+  assert.equal(report.edits.applied[0].kind, 'cancel');
+  assert.ok(text.includes('- [-] 下午三点跟产品对预算'), '原文还在，只是划掉');
+  assert.equal(text.replace(/\s+$/, '').split('\n').length, NOTE.split('\n').length, '一行都没少');
   assert.ok(text.includes('## 笔记'));
+});
+
+test('「删 / 删除 / 移除 / 去掉」这些写法也按划去处理：不会有哪一行被默默删掉', () => {
+  for (const op of ['删：', '删除：', '移除：', '去掉：', '划掉：']) {
+    const { text, report } = integrate(NOTE, { edits: parseEditBlock(`${op}下午三点跟产品对预算`).edits, lines: [] });
+    assert.equal(report.edits.applied.length, 1, `${op} 应该被认出来`);
+    assert.ok(text.includes('- [-] 下午三点跟产品对预算'), `${op} 原文要留下`);
+    assert.equal(text.replace(/\s+$/, '').split('\n').length, NOTE.split('\n').length, `${op} 行数不变`);
+  }
+});
+
+test('段落与标题不是条目：指令能对上也不改它们', () => {
+  const source = '# 标题\n\n这是一段普通文字\n';
+  const { text, report } = integrate(source, { edits: parseEditBlock('完成：这是一段普通文字').edits, lines: [] });
+
+  assert.equal(report.edits.applied.length, 0);
+  assert.equal(report.edits.skipped.length, 1);
+  assert.match(report.edits.skipped[0].reason, /不是条目/);
+  assert.equal(text, `${source.trimEnd()}\n`, '一个字都没动');
+  assert.equal(report.changed, false);
+});
+
+test('标记改写：待办 / 完成 / 划去 互转，缩进与正文都保留', () => {
+  assert.equal(markTask('- [x] 写周报'), '- [ ] 写周报');
+  assert.equal(markCancelled('- [ ] 写周报'), '- [-] 写周报');
+  assert.equal(markDone('- [-] 写周报'), '- [x] 写周报');
+  assert.equal(markCancelled('    - 整理收件箱'), '    - [-] 整理收件箱');
+  assert.equal(markDone('o 下午三点评审'), '- [x] 下午三点评审', '事件被标记时才变成复选框条目');
+  assert.equal(setMark('- [>] 迁移', ' '), '- [ ] 迁移');
+
+  assert.equal(isBulletLine('- 一'), true);
+  assert.equal(isBulletLine('o 事件'), true);
+  assert.equal(isBulletLine('• 原生写法'), true);
+  assert.equal(isBulletLine('普通段落'), false);
+  assert.equal(isBulletLine('## 标题'), false);
 });
 
 test('找不到对应条目时明确报出来，绝不动别的行', () => {

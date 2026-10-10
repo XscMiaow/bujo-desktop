@@ -73,5 +73,11 @@ contextBridge.exposeInMainWorld('bujo', {
    *   { header, lines, edit, dedupe } → 整合写入（改已有条目 + 跳过重复后再追加）
    *   { markdown }                    → 直接追加一段 Markdown
    */
-  appendNote: (payload) => ipcRenderer.invoke('note:append', payload)
+  appendNote: (payload) => ipcRenderer.invoke('note:append', payload),
+
+  /**
+   * 手工改一条条目的标记：mark 为 ' '（待办）/ 'x'（完成）/ '-'（划去，原文保留）。
+   * line 是条目在文件里的行号，text 是它的正文（行号失效时按内容找回）。
+   */
+  setBulletMark: (target) => ipcRenderer.invoke('note:set-mark', target)
 });

@@ -6,7 +6,7 @@ const http = require('node:http');
 const os = require('node:os');
 const { readMarkdownFile, MARKDOWN_EXTENSIONS } = require('./file-service');
 const { listJournals, ensureDailyJournal } = require('./journal-service');
-const { appendToNote, readNote, integrateNoteFile, isInsideDirectory } = require('./note-service');
+const { appendToNote, readNote, integrateNoteFile, setBulletMark, isInsideDirectory } = require('./note-service');
 const { SettingsService, DEFAULT_SETTINGS, LEGACY_SYSTEM_PROMPTS } = require('./settings-service');
 const { streamChat } = require('./chat-service');
 const { buildSystemPrompt } = require('../shared/ai-reply.js');
@@ -324,6 +324,17 @@ function registerIpcHandlers() {
     }
   });
 
+  // 手工改一条条目的标记：完成 / 划去（原文保留）/ 恢复为待办
+  ipcMain.handle('note:set-mark', async (_event, payload = {}) => {
+    try {
+      const resolved = assertWritableTarget(payload.filePath);
+      const result = await setBulletMark(resolved, { line: payload.line, text: payload.text, mark: payload.mark });
+      return { ok: true, ...result };
+    } catch (err) {
+      return { ok: false, error: err.message };
+    }
+  });
+
   // 渲染层需要它来决定打开哪一个 .md（启动参数里的文件）
   ipcMain.handle('app:initial-file', () => initialMarkdownArg());
 }
@@ -532,6 +543,64 @@ function inspectChatPanelPixels(image) {
 }
 
 /**
+ * 手工操作的端到端自检：在真实窗口里点「完成 / 划去 / 恢复」，
+ * 然后逐一核对文件里的那一行——尤其是划去：原文必须留在文件里，一行都不能少。
+ */
+async function runMarksSmoke(win, fs) {
+  const notePath = path.join(os.tmpdir(), `bujo-smoke-marks-${Date.now()}.md`);
+  fs.writeFileSync(
+    notePath,
+    ['# 自检临时笔记 · 手工操作', '', '- [ ] 先写周报', '- 整理收件箱', '- [ ] 买牛奶', '- [-] 已经划去的老条目', ''].join('\n'),
+    'utf8'
+  );
+
+  try {
+    const opened = await win.webContents.executeJavaScript(`window.BujoApp.loadFile(${JSON.stringify(notePath)})`);
+    if (!opened || !opened.ok) return { ok: false, error: (opened && opened.error) || '打不开临时笔记' };
+
+    const before = fs.readFileSync(notePath, 'utf8');
+    const clickReport = await win.webContents.executeJavaScript('window.__bujoSmokeTestMarks()');
+    const after = fs.readFileSync(notePath, 'utf8');
+
+    const afterLines = after.replace(/\r\n?/g, '\n').replace(/\s+$/, '').split('\n');
+    const beforeLines = before.replace(/\r\n?/g, '\n').replace(/\s+$/, '').split('\n');
+    const { parseDocument } = require('../shared/bullet-parser.js');
+    const stats = parseDocument(after).stats;
+
+    const file = {
+      // 完成：标记就地变成 [x]
+      doneLine: afterLines[2] === '- [x] 先写周报',
+      // 划去：普通笔记也能划，而且原文还在
+      cancelledNote: afterLines[3] === '- [-] 整理收件箱',
+      // 划去再恢复：回到待办
+      restoredLine: afterLines[4] === '- [ ] 买牛奶',
+      // 本来就划去的条目没被碰
+      untouched: afterLines[5] === '- [-] 已经划去的老条目',
+      // 一行都没少（划去不是删除）
+      nothingDeleted: afterLines.length === beforeLines.length,
+      headersKept: afterLines[0].startsWith('# 自检临时笔记'),
+      stats: stats.done === 1 && stats.cancelled === 2 && stats.task === 1
+    };
+
+    return {
+      ok: Boolean(clickReport && clickReport.ok) && Object.values(file).every(Boolean),
+      steps: clickReport && clickReport.steps,
+      alreadyActs: clickReport && clickReport.alreadyActs,
+      inventory: clickReport && clickReport.inventory,
+      layoutOk: clickReport && clickReport.layoutOk,
+      layout: clickReport && clickReport.layout,
+      toast: clickReport && clickReport.toast,
+      toastShown: clickReport && clickReport.toastShown,
+      file
+    };
+  } catch (err) {
+    return { ok: false, error: err.message };
+  } finally {
+    fs.rmSync(notePath, { force: true });
+  }
+}
+
+/**
  * 聊天链路自检：本地假模型服务 + 临时笔记文件，验证
  * 设置保存 → 流式对话 → 只把回答里的「日记块」按子弹笔记格式落盘；
  * 对话内容（解释、追问）不能进笔记。
@@ -626,7 +695,7 @@ async function runChatSmokeTest(win) {
       hasJournalTag: /<journal>/.test(sentSystem),
       hasEditTag: /<note-edit>/.test(sentSystem),
       hasBulletSymbols: ['- [ ] ', '- [>] ', '- [<] ', '- [!] '].every((symbol) => sentSystem.includes(symbol)),
-      hasIntegrationRules: ['改：', '完成：', '删：', '同一件事不要重复'].every((rule) => sentSystem.includes(rule)),
+      hasIntegrationRules: ['改：', '完成：', '划去：', '同一件事不要重复'].every((rule) => sentSystem.includes(rule)),
       upgradedFromLegacy: sentSystem.startsWith(DEFAULT_SETTINGS.systemPrompt) && !sentSystem.includes(legacyPrompt),
       length: sentSystem.length
     };
@@ -660,6 +729,10 @@ async function runChatSmokeTest(win) {
     // 把真实 DOM + 真实样式表拼成复核页：截图可能落后于 DOM，这张页不会
     const parts = await win.webContents.executeJavaScript('window.__bujoChatReviewHtml()');
     report.reviewPage = writeChatReviewPage(fs, parts);
+
+    // 手工改条目状态：真的去点界面上的按钮，再看文件里那一行变成了什么
+    report.marks = await runMarksSmoke(win, fs);
+    report.ok = report.ok && Boolean(report.marks && report.marks.ok);
 
     return report;
   } catch (err) {
