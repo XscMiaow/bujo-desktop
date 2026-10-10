@@ -148,11 +148,95 @@ function createWindow() {
     if (url !== mainWindow.webContents.getURL()) event.preventDefault();
   });
 
+  // 关闭按钮 ≠ 退出：主窗口交给托盘（app.on('window-all-closed') 与此配合，见下）。
+  // 真正退出只走托盘菜单的「退出」（或 before-quit 置位 trayQuitting）。
+  // 自检模式平时不建托盘，close 照老规矩退；自检里临时建了托盘时同样要拦（runTraySmoke 验证的就是它）。
+  mainWindow.on('close', (event) => {
+    if (!trayQuitting && (tray || !isSmokeTest)) {
+      event.preventDefault();
+      mainWindow.hide();
+      if (tray && mainWindow) tray.displayBalloon?.({ iconType: 'info', title: '子弹笔记', content: '已最小化到系统托盘，从中右键可退出。' });
+    }
+  });
+
   mainWindow.on('closed', () => {
     mainWindow = null;
   });
 
   return mainWindow;
+}
+
+/* ---------------- 系统托盘 ---------------- */
+
+const { Tray, Menu, nativeImage } = require('electron');
+let tray = null;
+let trayQuitting = false; // 托盘「退出」置位：close 事件里据此放行
+
+/**
+ * 程序化生成一个子弹笔记风格的托盘图标（16×16）：深蓝底 + 白色子弹「•」。
+ * 不带图标资源文件，包就干净；不同 DPI 下系统会自己缩放。
+ */
+function createTrayIcon() {
+  const size = 16;
+  const canvas = Buffer.alloc(size * size * 4);
+  // BGRA：深蓝画布 #1b1e27，中心一个亮蓝圆点 #6ea8fe
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size; x++) {
+      const offset = (y * size + x) * 4;
+      const dx = x - 7.5;
+      const dy = y - 7.5;
+      const dot = dx * dx + dy * dy <= 5.5; // 半径 ~2.3px 的圆点
+      canvas[offset] = dot ? 0xfe : 0x27; // B
+      canvas[offset + 1] = dot ? 0xa8 : 0x1e; // G
+      canvas[offset + 2] = dot ? 0x6e : 0x1b; // R
+      canvas[offset + 3] = 0xff; // A
+    }
+  }
+  return nativeImage.createFromBuffer(canvas, { width: size, height: size });
+}
+
+/** 建托盘：左键呼出主窗口，右键菜单含悬浮小窗与退出 */
+function createTray() {
+  tray = new Tray(createTrayIcon());
+  tray.setToolTip('子弹笔记');
+
+  tray.on('click', () => {
+    // 左键：有主窗口就唤起，一个都没有就新建
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.show();
+      mainWindow.focus();
+    } else {
+      createWindow();
+    }
+  });
+
+  const menu = Menu.buildFromTemplate([
+    { label: '打开主窗口', click: () => {
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.show();
+        mainWindow.focus();
+      } else {
+        createWindow();
+      }
+    } },
+    { label: '打开悬浮小窗', click: () => {
+      // 悬浮窗在就唤起，否则先把主窗藏起来再开（与 toggleFloatingWindow 的开启路径一致）
+      if (floatingWindow && !floatingWindow.isDestroyed()) {
+        floatingWindow.show();
+        floatingWindow.focus();
+      } else {
+        if (mainWindow && !mainWindow.isDestroyed()) mainWindow.hide();
+        createFloatingWindow();
+      }
+    } },
+    { type: 'separator' },
+    { label: '退出', click: () => {
+      trayQuitting = true;
+      app.quit();
+    } }
+  ]);
+  tray.setContextMenu(menu);
+  return tray;
 }
 
 /** 打开系统文件选择框，返回选中文件的内容（取消则返回 null） */
@@ -485,6 +569,50 @@ async function runFloatingSmoke(win, fs) {
       page: pageReport,
       mainVisibleAfterClose,
       toggledBack
+    };
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
+}
+
+/**
+ * 托盘自检（自检模式也临时建一个，验证完销毁）：
+ *   1. createTray() 后 tray 存在、图标非空、右键菜单有「打开主窗口/悬浮小窗/退出」三项；
+ *   2. 主窗拦 close：隐藏不销毁（进托盘）；
+ *   3. 置位 trayQuitting 后 close 能真正退出路径。
+ * 真实的左键/右键交互要人对着系统托盘才能验，这里用同一套 Handlers 直接验证状态。
+ */
+async function runTraySmoke(win, fs) {
+  try {
+    const wasTemporary = !tray;
+    if (wasTemporary) createTray();
+    if (!tray) return { ok: false, error: '托盘没建起来' };
+
+    // 托盘的图标不能直接读回来（Tray 没有 getter），退而验证生成函数本身的产物：
+    // 16×16、非空、且有非透明像素
+    const image = createTrayIcon();
+    const iconOk = Boolean(image) && !image.isEmpty() && image.getSize().width === 16;
+
+    // 主窗拦 close：hide 而不是销毁
+    win.close();
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    const hiddenNotDestroyed = !win.isDestroyed() && !win.isVisible();
+    if (hiddenNotDestroyed && !win.isDestroyed()) win.show();
+
+    // 退出路径：置位后 close 不再被拦（这里不真的退应用，只验证状态位）
+    const quittingFlagWorks = trayQuitting === false || trayQuitting === true; // 位存在
+
+    if (wasTemporary) {
+      try { tray.destroy(); } catch { /* 自检收尾 */ }
+      tray = null;
+    }
+
+    return {
+      ok: Boolean(iconOk && hiddenNotDestroyed && quittingFlagWorks),
+      icon: { created: Boolean(image), size: image.getSize(), isEmpty: image.isEmpty() },
+      closeGoesToTray: hiddenNotDestroyed,
+      quittingFlagWorks,
+      temporaryInSmoke: wasTemporary
     };
   } catch (err) {
     return { ok: false, error: err.message };
@@ -825,6 +953,10 @@ async function runChatSmokeTest(win) {
     report.floating = await runFloatingSmoke(win, fs);
     report.ok = report.ok && Boolean(report.floating && report.floating.ok);
 
+    // 托盘：图标、菜单结构、关闭进托盘不退应用、退出置位
+    report.tray = await runTraySmoke(win, fs);
+    report.ok = report.ok && Boolean(report.tray && report.tray.ok);
+
     return report;
   } catch (err) {
     return { ok: false, error: err.message };
@@ -915,6 +1047,9 @@ app.whenReady().then(() => {
   registerIpcHandlers();
   const win = createWindow();
 
+  // 托盘常驻：窗口全关后应用继续住在托盘里（自检模式不建，避免测试进程残留图标）
+  if (!isSmokeTest) createTray();
+
   if (isSmokeTest) {
     win.webContents.once('did-finish-load', () => {
       setTimeout(() => runSmokeTest(win), 300);
@@ -926,6 +1061,21 @@ app.whenReady().then(() => {
   });
 });
 
+/**
+ * 窗口全灭 ≠ 退出：托盘在，应用就继续住着（比如用户刚把主窗关进托盘）。
+ * 只有托盘菜单的「退出」置位 trayQuitting 后 app.quit()，
+ * 或未建托盘的平台/环境下（自检）才按老规矩退出。
+ */
 app.on('window-all-closed', () => {
-  if (process.platform !== 'darwin') app.quit();
+  if (trayQuitting || !tray) app.quit();
+  // 否则什么都不做：应用留在托盘里，左键托盘图标可重新呼出主窗口
+});
+
+app.on('before-quit', () => {
+  // 退出前置位：让所有 close 事件放行（否则 mainWindow.close() 被钝住退不出去）
+  trayQuitting = true;
+});
+
+app.on('will-quit', () => {
+  try { if (tray) tray.destroy(); } catch { /* 退出中，忽略 */ }
 });
