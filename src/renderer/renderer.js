@@ -32,6 +32,9 @@ const els = {
 
 const SIDEBAR_KEY = 'bujo.sidebar.collapsed';
 
+/** 悬浮小窗模式：同一页面用 URL 参数识别，切到精简布局 */
+const IS_FLOATING = new URLSearchParams(window.location.search).get('floating') === '1';
+
 const state = {
   file: null, // { path, name, dir, size, modifiedAt, content }
   blocks: [],
@@ -568,10 +571,97 @@ window.__bujoSmokeTest = async (filePath) => {
   };
 };
 
+/* ---------------- 悬浮小窗 ---------------- */
+
+/**
+ * 悬浮小窗是同一个页面的精简形态（?floating=1）：
+ *   - 隐藏工具栏、日记栏、文件条、图例，只留「当天要点 + 回主窗口」与聊天面板；
+ *   - 聊天面板默认展开（悬浮窗的主要交互就是它）；
+ *   - 自动打开当天的日记（不存在则不创建，主窗口里再创建）。
+ */
+const floating = {
+  active: IS_FLOATING,
+  reused: false, // 自检用：applyFloatingMode() 已初始化过
+  daily: null // 自动参考的当天日记 { path, name }
+};
+
+function applyFloatingMode() {
+  document.body.classList.toggle('is-floating', IS_FLOATING);
+  const toggle = document.getElementById('floating-toggle');
+  if (toggle) toggle.hidden = IS_FLOATING;
+  if (!IS_FLOATING) return;
+
+  // 悬浮窗里聊天常驻展开
+  if (window.BujoChat && typeof window.BujoChat.setOpen === 'function') window.BujoChat.setOpen(true);
+  els.sidebar.classList.add('collapsed');
+
+  // 顶部换成一条极简悬浮条，只带「回主窗口」
+  const bar = document.createElement('div');
+  bar.id = 'float-bar';
+  bar.innerHTML = [
+    '<span class="float-title">• 今日要点</span>',
+    '<button id="float-back" class="btn tiny" type="button">回主窗口</button>'
+  ].join('');
+  document.body.prepend(bar);
+  const back = bar.querySelector('#float-back');
+  back.addEventListener('click', async () => {
+    await window.bujo.toggleFloating();
+  });
+
+  floating.reused = true;
+  showFloatingDaily();
+}
+
+/**
+ * 悬浮窗自动载入「当天日记」。
+ * 只读不创建（不存在时主窗口里再建），并记住路径写入 chat 的「记入」目标默认值——
+ * 在悬浮窗里多半就是往今天记一笔。
+ */
+async function showFloatingDaily() {
+  const today = await window.bujo.getTodayJournal({ create: false });
+  if (today && today.ok && today.exists) {
+    floating.daily = { path: today.path, name: today.name };
+    await loadFile(today.path);
+  } else {
+    els.fileMeta.textContent = '今天的日记还没有 —— 回主窗口打开即可自动创建';
+  }
+}
+
 /** 自检用：找正文匹配的条目（重载后 DOM 会重建，所以每次都重新查） */
 function findEntryByText(needle) {
   return [...document.querySelectorAll('.bujo-entry')].find((el) => el.dataset.text === needle) || null;
 }
+
+/**
+ * 自检入口：悬浮小窗模式的页面形态。
+ * 悬浮窗打开后加载数当日日记（若存在），检查：精简条存在、完整工具栏/侧栏/图例被隐藏、
+ * 正文确实渲染出了条目、聊天面板展开、「回主窗口」按钮存在。
+ */
+window.__bujoSmokeTestFloatingPage = async () => {
+  const reused = floating.reused; // applyFloatingMode() 被调了一次后置 true，防双插悬浮条
+  const bar = document.getElementById('float-bar');
+  const toolbarHidden = getComputedStyle(document.querySelector('.toolbar')).display === 'none';
+  const sidebarHidden = getComputedStyle(els.sidebar).display === 'none';
+  const legendHidden = getComputedStyle(els.legend).display === 'none';
+  const chatOpen = !document.getElementById('chat-panel').hidden;
+  const hasBack = Boolean(bar && bar.querySelector('#float-back'));
+  const fileMeta = els.fileMeta.textContent || '';
+  const entries = document.querySelectorAll('.bujo-entry').length;
+
+  return {
+    ok: Boolean(bar) && toolbarHidden && sidebarHidden && legendHidden && chatOpen && hasBack && (entries > 0 || fileMeta.includes('还没有')),
+    reused,
+    barPresent: Boolean(bar),
+    toolbarHidden,
+    sidebarHidden,
+    legendHidden,
+    chatOpen,
+    hasBack,
+    dailyFile: (floating.daily && floating.daily.name) || null,
+    fileMeta,
+    entries
+  };
+};
 
 /** 自检用：等条目变成期望的状态 */
 async function waitEntryKind(text, kind, timeout = 3000) {
@@ -671,6 +761,20 @@ window.__bujoSmokeTestMarks = async () => {
   })();
   els.sidebar.classList.toggle('collapsed', remembered === '1');
   els.sidebarToggle.textContent = remembered === '1' ? '›' : '‹';
+
+  if (floating.active) {
+    applyFloatingMode();
+  } else {
+    // 悬浮窗入口按钮只出现在主窗口工具栏
+    const toggle = document.getElementById('floating-toggle');
+    if (toggle) {
+      toggle.hidden = false;
+      toggle.addEventListener('click', async () => {
+        const result = await window.bujo.toggleFloating();
+        if (result && !result.ok) showError(`切换悬浮小窗失败：${result.error}`);
+      });
+    }
+  }
 
   await refreshJournals();
   const initial = await window.bujo.getInitialFile();

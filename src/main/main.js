@@ -200,6 +200,21 @@ function registerIpcHandlers() {
     return { ok: true };
   });
 
+  // ---------------- 窗口切换（主窗口 ⇄ 悬浮小窗） ----------------
+
+  ipcMain.handle('window:floating-state', () => ({
+    floating: Boolean(floatingWindow && !floatingWindow.isDestroyed())
+  }));
+
+  // 切换到悬浮小窗：返回 { ok, floating }
+  ipcMain.handle('window:toggle-floating', () => {
+    try {
+      return { ok: true, ...toggleFloatingWindow() };
+    } catch (err) {
+      return { ok: false, error: err.message };
+    }
+  });
+
   // 左侧日记栏：列出日记目录里的 Markdown 文件
   ipcMain.handle('journal:list', async () => {
     try {
@@ -402,6 +417,78 @@ async function captureFrame(win, attempts = 6) {
     if (!image.isEmpty()) return image;
   }
   return null;
+}
+
+/**
+ * 悬浮小窗自检：用真实 IPC 切过去，验证悬浮页的精简形态与回切。
+ * 步骤：开悬浮窗（主窗口隐藏）→ 悬浮页里跑页面形态断言 → 关悬浮窗 → 主窗口重新可见。
+ */
+async function runFloatingSmoke(win, fs) {
+  try {
+    const opened = await win.webContents.executeJavaScript(
+      'window.bujo.isFloatingMode ? window.bujo.isFloatingMode().then((s) => ({ ...s, bridge: true })) : { floating: false, bridge: false }'
+    );
+    const stateBefore = await win.webContents.executeJavaScript(
+      '(async () => ({ ok: true, floating: (await window.bujo.isFloatingMode()).floating, dailyName: (window.BujoApp.currentFile() || {}).name || null }))()'
+    );
+
+    const toggled = await win.webContents.executeJavaScript('window.bujo.toggleFloating()');
+    if (!toggled || !toggled.ok) return { ok: false, error: (toggled && toggled.error) || '悬浮窗开不了', opened, stateBefore };
+
+    // 等悬浮窗创建并加载完成
+    let floatingWin = null;
+    for (let i = 0; i < 40 && !floatingWin; i++) {
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      floatingWin = BrowserWindow.getAllWindows().find(
+        (candidate) => candidate.webContents.getURL().includes('floating=1')
+      ) || null;
+    }
+    if (!floatingWin) return { ok: false, error: '悬浮窗没建出来', opened, stateBefore };
+
+    const mainHiddenDuringFloating = win.isDestroyed() ? null : !win.isVisible();
+    const alwaysOnTop = floatingWin.isAlwaysOnTop();
+
+    // 等悬浮页面完成自检初始化
+    let pageReport = null;
+    for (let i = 0; i < 30; i++) {
+      await new Promise((resolve) => setTimeout(resolve, 150));
+      try {
+        pageReport = await floatingWin.webContents.executeJavaScript(
+          'window.__bujoSmokeTestFloatingPage ? window.__bujoSmokeTestFloatingPage() : null'
+        );
+        if (pageReport && pageReport.ok) break;
+      } catch { /* 页面还没好，再等一拍 */ }
+    }
+
+    if (floatingWin && !floatingWin.isDestroyed()) floatingWin.close();
+    // 等主窗口被 closed 回调恢复
+    await new Promise((resolve) => setTimeout(resolve, 400));
+    const mainVisibleAfterClose = win.isDestroyed() ? null : win.isVisible();
+
+    const toggledBack = BrowserWindow.getAllWindows().length === 1;
+
+    const pageOk = Boolean(pageReport && pageReport.ok);
+    const ok = Boolean(
+      opened && opened.bridge &&
+      stateBefore && stateBefore.floating === false &&
+      toggled.ok && mainHiddenDuringFloating === true &&
+      alwaysOnTop && pageOk && mainVisibleAfterClose === true && toggledBack
+    );
+
+    return {
+      ok,
+      opened,
+      stateBefore,
+      toggled,
+      mainHiddenDuringFloating,
+      alwaysOnTop,
+      page: pageReport,
+      mainVisibleAfterClose,
+      toggledBack
+    };
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
 }
 
 /** 无界面自检：真的走一遍 preload → IPC → 解析 → 渲染，并截图留证 */
@@ -734,6 +821,10 @@ async function runChatSmokeTest(win) {
     report.marks = await runMarksSmoke(win, fs);
     report.ok = report.ok && Boolean(report.marks && report.marks.ok);
 
+    // 悬浮小窗：开 → 检查精简页形态（当天日记自动载入、聊天展开、主窗口隐藏）→ 关 → 主窗口恢复
+    report.floating = await runFloatingSmoke(win, fs);
+    report.ok = report.ok && Boolean(report.floating && report.floating.ok);
+
     return report;
   } catch (err) {
     return { ok: false, error: err.message };
@@ -745,6 +836,79 @@ async function runChatSmokeTest(win) {
     settings = null; // 丢掉缓存，后续重新从文件读
     fs.rmSync(notePath, { force: true });
   }
+}
+
+/* ---------------- 悬浮小窗 ---------------- */
+
+let floatingWindow = null;
+
+/** 悬浮小窗的固定紧凑尺寸 */
+const FLOATING_SIZE = { width: 360, height: 560 };
+
+/**
+ * 悬浮小窗：紧凑、置顶的单窗，加载与主窗口同一个页面（?floating=1），
+ * 渲染层据此切到精简布局（当天要点 + 精简聊天）。
+ * 开悬浮窗时主窗口隐藏，关闭后恢复；两个窗口各自持有页面状态，
+ * 所以切换时主窗口只是隐藏而不是销毁。
+ */
+function createFloatingWindow() {
+  if (floatingWindow && !floatingWindow.isDestroyed()) {
+    floatingWindow.show();
+    floatingWindow.focus();
+    return floatingWindow;
+  }
+
+  floatingWindow = new BrowserWindow({
+    width: FLOATING_SIZE.width,
+    height: FLOATING_SIZE.height,
+    minWidth: 300,
+    minHeight: 380,
+    title: '子弹笔记 · 悬浮',
+    backgroundColor: '#14161c',
+    alwaysOnTop: true,
+    skipTaskbar: true,
+    resizable: true,
+    show: !isSmokeTest,
+    webPreferences: {
+      preload: path.join(__dirname, '..', 'preload', 'preload.js'),
+      contextIsolation: true,
+      nodeIntegration: false,
+      backgroundThrottling: false
+    }
+  });
+
+  // 同一个页面：渲染层用 URL 参数识别悬浮模式
+  floatingWindow.loadFile(path.join(__dirname, '..', 'renderer', 'index.html'), { query: { floating: '1' } });
+
+  floatingWindow.webContents.setWindowOpenHandler(({ url }) => {
+    if (/^https?:/i.test(url)) shell.openExternal(url);
+    return { action: 'deny' };
+  });
+  floatingWindow.webContents.on('will-navigate', (event, url) => {
+    if (url !== floatingWindow.webContents.getURL()) event.preventDefault();
+  });
+
+  floatingWindow.on('closed', () => {
+    floatingWindow = null;
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.show();
+      mainWindow.focus();
+    }
+  });
+
+  return floatingWindow;
+}
+
+/** 切换悬浮小窗：开 → 主窗口隐藏；关 → 恢复主窗口 */
+function toggleFloatingWindow() {
+  if (floatingWindow && !floatingWindow.isDestroyed()) {
+    // 已开着：收浮窗、回主窗口
+    floatingWindow.close();
+    return { floating: false };
+  }
+  if (mainWindow && !mainWindow.isDestroyed()) mainWindow.hide();
+  createFloatingWindow();
+  return { floating: true };
 }
 
 app.whenReady().then(() => {

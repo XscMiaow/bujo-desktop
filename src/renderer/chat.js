@@ -69,6 +69,9 @@ function setChatOpen(open) {
   if (open) chatEls.input.focus();
 }
 
+/** 给悬浮窗初始化用的：聊天面板默认展开（不写偏好存储，用户的选择不被覆盖） */
+window.BujoChat = { setOpen: setChatOpen };
+
 /* ---------------- 消息渲染 ---------------- */
 
 /** 解析一条回答（带缓存，流式时只在内容变化时重解析） */

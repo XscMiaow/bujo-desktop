@@ -22,6 +22,12 @@ contextBridge.exposeInMainWorld('bujo', {
   /** 启动参数里带的 .md 路径（没有则为 null） */
   getInitialFile: () => ipcRenderer.invoke('app:initial-file'),
 
+  /** 当前是不是悬浮小窗模式 */
+  isFloatingMode: () => ipcRenderer.invoke('window:floating-state'),
+
+  /** 主窗口 ⇄ 悬浮小窗切换：返回 { ok, floating } */
+  toggleFloating: () => ipcRenderer.invoke('window:toggle-floating'),
+
   /** 日记目录里的文件列表，最新在前：{ ok, dir, files } */
   listJournals: () => ipcRenderer.invoke('journal:list'),
 
