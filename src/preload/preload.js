@@ -28,6 +28,16 @@ contextBridge.exposeInMainWorld('bujo', {
   /** 主窗口 ⇄ 悬浮小窗切换：返回 { ok, floating } */
   toggleFloating: () => ipcRenderer.invoke('window:toggle-floating'),
 
+  /** 悬浮窗内：折叠成一条窄条 / 展开成完整悬浮窗 */
+  setFloatingCollapsed: (collapsed) => ipcRenderer.invoke('floating:set-collapsed', collapsed),
+
+  /** 订阅悬浮窗折叠状态变化（主进程驱动窗口尺寸，页面驱动布局） */
+  onFloatingCollapsed: (handler) => {
+    const listener = (_event, payload) => handler(payload);
+    ipcRenderer.on('floating:collapsed-state', listener);
+    return () => ipcRenderer.removeListener('floating:collapsed-state', listener);
+  },
+
   /** 日记目录里的文件列表，最新在前：{ ok, dir, files } */
   listJournals: () => ipcRenderer.invoke('journal:list'),
 

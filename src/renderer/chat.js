@@ -70,7 +70,13 @@ function setChatOpen(open) {
 }
 
 /** 给悬浮窗初始化用的：聊天面板默认展开（不写偏好存储，用户的选择不被覆盖） */
-window.BujoChat = { setOpen: setChatOpen };
+window.BujoChat = {
+  setOpen: setChatOpen,
+  /** 悬浮窗读聊天状态用（只读，不改 DOM）：最近的消息数组快照 */
+  peekMessages: () => chatState.messages.slice(),
+  /** 悬浮窗读聊天状态用（只读）：是否正在生成回复 */
+  peekStreaming: () => chatState.streaming
+};
 
 /* ---------------- 消息渲染 ---------------- */
 
@@ -512,6 +518,10 @@ function setStreaming(streaming) {
   chatEls.send.disabled = streaming;
   chatEls.cancel.hidden = !streaming;
   chatEls.send.textContent = streaming ? '生成中…' : '发送';
+  // 悬浮窗：悬浮条上的「⌕」按钮随生成开始/结束锁定/解锁
+  if (typeof window.__bujoOnChatStreamingChanged === 'function') {
+    try { window.__bujoOnChatStreamingChanged(); } catch { /* 页面助手不可用就忽略 */ }
+  }
 }
 
 function updateChatStatus() {
@@ -538,6 +548,10 @@ async function sendMessage(text) {
   appendMessage({ role: 'user', content: question });
   // pending：AI 回复前先显示「正在思考…」与等待中的草稿卡，不提前跳出空卡片
   const assistant = appendMessage({ role: 'assistant', content: '', pending: true });
+  // 悬浮窗：向 AI 发送后自动展开回复区（用户主动发送即是想看回复）
+  if (typeof window.__bujoOnChatSend === 'function') {
+    try { window.__bujoOnChatSend(); } catch { /* 页面助手不可用就忽略 */ }
+  }
 
   const requestId = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
   chatState.requestId = requestId;
@@ -810,6 +824,8 @@ window.bujo.onChatDelta(({ requestId, text }) => {
   assistant.content = (assistant.content || '') + text;
   assistant.pending = false;
   scheduleAssistantRender(assistant);
+  // 悬浮窗：AI 开口了才算「有最新回复」，这里首次触发弹出通知
+  if (typeof window.__bujoOnChatActivity === 'function') window.__bujoOnChatActivity({ from: 'delta' });
 });
 
 (async function initChat() {

@@ -1,6 +1,6 @@
 'use strict';
 
-const { app, BrowserWindow, ipcMain, dialog, shell, safeStorage } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, shell, safeStorage, Menu } = require('electron');
 const path = require('node:path');
 const http = require('node:http');
 const os = require('node:os');
@@ -168,7 +168,7 @@ function createWindow() {
 
 /* ---------------- 系统托盘 ---------------- */
 
-const { Tray, Menu, nativeImage } = require('electron');
+const { Tray, nativeImage } = require('electron');
 let tray = null;
 let trayQuitting = false; // 托盘「退出」置位：close 事件里据此放行
 
@@ -294,6 +294,18 @@ function registerIpcHandlers() {
   ipcMain.handle('window:toggle-floating', () => {
     try {
       return { ok: true, ...toggleFloatingWindow() };
+    } catch (err) {
+      return { ok: false, error: err.message };
+    }
+  });
+
+  // 悬浮窗内：折叠成一条窄条 / 展开成完整悬浮窗（右上角 − 按钮）
+  ipcMain.handle('floating:set-collapsed', (event, collapsed) => {
+    try {
+      const win = BrowserWindow.fromWebContents(event.sender);
+      if (!win || win !== floatingWindow) return { ok: false, error: '只在悬浮窗内可用' };
+      setFloatingCollapsed(win, Boolean(collapsed));
+      return { ok: true, collapsed: Boolean(collapsed) };
     } catch (err) {
       return { ok: false, error: err.message };
     }
@@ -544,6 +556,33 @@ async function runFloatingSmoke(win, fs) {
       } catch { /* 页面还没好，再等一拍 */ }
     }
 
+    // 窗口级几何：页面折叠断言不验证真实窗口尺寸；这里从主进程直接折叠、
+    // 量 win.getBounds() 本体（不靠页面电池隐藏），再展开恢复。
+    let windowGeometry = null;
+    if (floatingWin && !floatingWin.isDestroyed()) {
+      try {
+        // 预热：让页面先收起回复区（回到初态，避免跟页面自检的 toggle 残留态打架）
+        await floatingWin.webContents.executeJavaScript(
+          'window.__bujoSmokeTestFloatingPageReset ? window.__bujoSmokeTestFloatingPageReset() : null'
+        );
+        setFloatingCollapsed(floatingWin, true);
+        await new Promise((resolve) => setTimeout(resolve, 200));
+        const bounds = floatingWin.getBounds();
+        const collapsed = { width: bounds.width, height: bounds.height };
+        const barRect = await floatingWin.webContents.executeJavaScript(
+          '((r) => ({ w: r.width, h: r.height }))(document.getElementById(\'float-bar\').getBoundingClientRect())'
+        );
+        setFloatingCollapsed(floatingWin, false);
+        await new Promise((resolve) => setTimeout(resolve, 200));
+        const expanded = floatingWin.getBounds();
+        windowGeometry = {
+          collapsed,
+          expanded: { width: expanded.width, height: expanded.height },
+          barRect
+        };
+      } catch { /* 页面关得快就算了 */ }
+    }
+
     if (floatingWin && !floatingWin.isDestroyed()) floatingWin.close();
     // 等主窗口被 closed 回调恢复
     await new Promise((resolve) => setTimeout(resolve, 400));
@@ -552,11 +591,21 @@ async function runFloatingSmoke(win, fs) {
     const toggledBack = BrowserWindow.getAllWindows().length === 1;
 
     const pageOk = Boolean(pageReport && pageReport.ok);
+    // 真窗口几何：折叠后必须真的是一条窄条（≈260×40），展开恢复（≈360×560）。
+    // 内部 client 尺寸比窗口尺寸小几 px（无边界误差），给 14px 容差。
+    const geoOk = Boolean(
+      windowGeometry &&
+      Math.abs(windowGeometry.collapsed.width - FLOATING_COLLAPSED.width) <= 14 &&
+      Math.abs(windowGeometry.collapsed.height - FLOATING_COLLAPSED.height) <= 14 &&
+      Math.abs(windowGeometry.expanded.width - FLOATING_SIZE.width) <= 14 &&
+      Math.abs(windowGeometry.expanded.height - FLOATING_SIZE.height) <= 14 &&
+      windowGeometry.barRect.w > 0 && windowGeometry.barRect.h > 0
+    );
     const ok = Boolean(
       opened && opened.bridge &&
       stateBefore && stateBefore.floating === false &&
       toggled.ok && mainHiddenDuringFloating === true &&
-      alwaysOnTop && pageOk && mainVisibleAfterClose === true && toggledBack
+      alwaysOnTop && pageOk && geoOk && mainVisibleAfterClose === true && toggledBack
     );
 
     return {
@@ -567,6 +616,8 @@ async function runFloatingSmoke(win, fs) {
       mainHiddenDuringFloating,
       alwaysOnTop,
       page: pageReport,
+      windowGeometry,
+      geoOk,
       mainVisibleAfterClose,
       toggledBack
     };
@@ -974,12 +1025,39 @@ async function runChatSmokeTest(win) {
 
 let floatingWindow = null;
 
-/** 悬浮小窗的固定紧凑尺寸 */
+/** 悬浮小窗的尺寸：展开态（完整悬浮窗）与折叠态（同宽的窄条，只有悬浮条高） */
 const FLOATING_SIZE = { width: 360, height: 560 };
+const FLOATING_COLLAPSED = { width: 360, height: 44 }; // 宽度不变，高度收到悬浮条一条
 
 /**
- * 悬浮小窗：紧凑、置顶的单窗，加载与主窗口同一个页面（?floating=1），
+ * 把悬浮窗切到折叠/展开形态：只调窗口高度，宽度保持不变（用户说窄条不该横着变短）。
+ * 折叠态：悬浮条一条（44px）；展开态：回完整悬浮窗。窗口位置完全不动。
+ * 同一个窗口内切换，页面状态（当天日记、聊天历史）不丢。
+ */
+function setFloatingCollapsed(win, collapsed) {
+  const height = collapsed ? FLOATING_COLLAPSED.height : FLOATING_SIZE.height;
+  const [x, y] = win.getPosition();
+  try {
+    win.setResizable(false);
+    win.setBounds({ x, y, width: FLOATING_SIZE.width, height }, false);
+    // 偶发（Windows 命中动画/组合线程延迟时）setBounds 会被下一次布局合并掉：
+    // 短轮询等实际高度到位，没到位就再设一次，最多 ~300ms。
+    for (let i = 0; i < 15; i++) {
+      const [, gotHeight] = win.getSize();
+      if (gotHeight === height) break;
+      win.setBounds({ x, y, width: FLOATING_SIZE.width, height }, false);
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 20);
+    }
+  } finally {
+    win.setResizable(true);
+  }
+  win.webContents.send('floating:collapsed-state', { collapsed });
+}
+
+/**
+ * 悬浮小窗：紧凑、置顶、无边框的单窗，加载与主窗口同一个页面（?floating=1），
  * 渲染层据此切到精简布局（当天要点 + 精简聊天）。
+ * 右上角的「−」在折叠（一条窄条）与展开（完整悬浮窗）之间切换。
  * 开悬浮窗时主窗口隐藏，关闭后恢复；两个窗口各自持有页面状态，
  * 所以切换时主窗口只是隐藏而不是销毁。
  */
@@ -993,8 +1071,9 @@ function createFloatingWindow() {
   floatingWindow = new BrowserWindow({
     width: FLOATING_SIZE.width,
     height: FLOATING_SIZE.height,
-    minWidth: 300,
-    minHeight: 380,
+    minWidth: 260,
+    minHeight: 40,
+    frame: false, // 无上边栏：拖拽由页面内精简条负责，折叠按钮在右上角
     title: '子弹笔记 · 悬浮',
     backgroundColor: '#14161c',
     alwaysOnTop: true,
@@ -1028,16 +1107,25 @@ function createFloatingWindow() {
     }
   });
 
+  // 初始就是展开态
+  floatingWindow.webContents.once('did-finish-load', () => {
+    floatingWindow?.webContents.send('floating:collapsed-state', { collapsed: false });
+  });
+
   return floatingWindow;
 }
 
 /** 切换悬浮小窗：开 → 主窗口隐藏；关 → 恢复主窗口 */
 function toggleFloatingWindow() {
-  if (floatingWindow && !floatingWindow.isDestroyed()) {
-    // 已开着：收浮窗、回主窗口
-    floatingWindow.close();
-    return { floating: false };
+  if (floatingWindow && !floatingWindow.isDestroyed()) {  // 关闭悬浮窗 → 回主窗口。先把主窗召回来再关（close 回调里兜底也做一遍，
+  // 避免 close 在位但回调没跑时主窗一直藏在后台）。
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.show();
+    mainWindow.focus();
   }
+  floatingWindow.close();
+  return { floating: false };
+}
   if (mainWindow && !mainWindow.isDestroyed()) mainWindow.hide();
   createFloatingWindow();
   return { floating: true };
@@ -1045,6 +1133,10 @@ function toggleFloatingWindow() {
 
 app.whenReady().then(() => {
   registerIpcHandlers();
+  // 去掉主窗口的默认系统菜单栏（文件/编辑/视图…）：应用自己的操作都在页面里。
+  // Windows/Linux 用 Menu.setApplicationMenu(null)；macOS 若置空会连复制粘贴等快捷键一起丢，
+  // 但本项目窗口本来就是无边框自绘，只处理非 macOS。
+  if (process.platform !== 'darwin') Menu.setApplicationMenu(null);
   const win = createWindow();
 
   // 托盘常驻：窗口全关后应用继续住在托盘里（自检模式不建，避免测试进程残留图标）

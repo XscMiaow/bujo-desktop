@@ -79,7 +79,10 @@
         </div>
 
         <form class="chat-composer" id="chat-form">
-          <textarea id="chat-input" rows="3" placeholder="问点什么…（Enter 发送，Shift + Enter 换行）"></textarea>
+          <div class="chat-input-row">
+            <textarea id="chat-input" rows="3" placeholder="问点什么…（Enter 发送，Shift + Enter 换行）"></textarea>
+            <button id="chat-send" class="btn primary chat-send" type="submit">发送</button>
+          </div>
           <div class="chat-composer-row">
             <label class="chat-target">
               记入
@@ -97,7 +100,6 @@
               </select>
             </label>
             <button id="chat-cancel" class="btn" type="button" hidden>停止</button>
-            <button id="chat-send" class="btn primary" type="submit">发送</button>
           </div>
         </form>
       </aside>

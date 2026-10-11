@@ -45,7 +45,7 @@ body {
   font-size: 12.5px;
 }
 
-/* 精简条：页面最顶上的一行，替代完整工具栏 */
+/* 精简条：页面最顶上的一行，替代完整工具栏（下文还有无边框版的二次定义，那边为准） */
 .float-bar {
   display: flex;
   align-items: center;
@@ -61,6 +61,7 @@ body {
   -webkit-app-region: no-drag;
 }
 
+/* 旧的窄碎标题样式（早期版本）：现由无边框版 .float-title 接管 */
 .float-title {
   color: var(--kind-task);
   font-size: 12.5px;
@@ -82,19 +83,74 @@ body.is-floating .workspace {
   flex-direction: column;
 }
 
+/* 悬浮窗里：正文块只占所需高度，剩余空间全部聊天（贴底，不留黑色空区） */
+body.is-floating main.content {
+  padding: 14px 16px 16px;
+}
+
 body.is-floating .chat-panel {
   position: static;
   width: 100%;
-  height: auto;
   flex: 1;
+  min-height: 0;
   border-left: none;
   border-top: 1px solid var(--border);
 }
 
+/* chat-panel 不再吃满窗高后，聊天内容自己贴底：
+   消息流向上顶开，输入区始终紧贴窗口底边 */
+body.is-floating .chat-panel .chat-messages,
+body.is-floating .chat-panel .chat-empty {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+/* 悬浮窗内：聊天不再有自己的标题栏（回主窗口/折叠都在悬浮条上） */
+body.is-floating .chat-head {
+  display: none;
+}
+
+/* 悬浮窗：消息区收着时只剩底部一小行输入（AI 有新回复才弹出消息区）；
+   输入行永不隐藏（不可关闭的那一小行），且必须贴窗口底边：
+   面板里只剩它一个子元素时 flex 默认顶排，不推到底就会下方留黑底 */
+body.is-floating .chat-panel.messages-hidden .chat-messages,
+body.is-floating .chat-panel.messages-hidden .chat-empty {
+  display: none;
+}
+
+body.is-floating .chat-panel.messages-hidden .chat-composer {
+  margin-top: auto;
+}
+
+body.is-floating .chat-composer textarea {
+  flex: 1;
+  min-height: 24px;
+  max-height: 60px;
+  resize: none;
+  width: auto; /* .chat-input-row flex 下不再 100% 宽，右侧留出发送键 */
+}
+
+body.is-floating .chat-composer {
+  padding: 6px 8px;
+}
+
+body.is-floating .chat-send {
+  padding: 6px 12px;
+}
+
+body.is-floating .chat-composer-row .chat-target {
+  display: none; /* 精简输入行不带下拉，默认就是「昨天的日记」目标 */
+}
+
+body.is-floating .chat-input-row-mini {
+  font-size: 12px;
+}
+
 body.is-floating .main-col {
   flex: none;
-  max-height: 44%;
-  overflow: auto;
+  max-height: 46%;
+  min-height: 0;
 }
 
 body.is-floating .chat-panel[hidden] {
@@ -111,6 +167,152 @@ body.is-floating .chat-messages {
 
 body.is-floating .chat-composer textarea {
   min-height: 40px;
+}
+
+/* ---------- 悬浮窗：无边框形态（悬浮条 + 折叠） ---------- */
+
+/* 无边框窗口：圆角 + 悬浮条自身可拖（按钮 excluded） */
+body.is-floating {
+  border-radius: 10px;
+  overflow: hidden;
+}
+
+/* 悬浮条：一条窄条，充当顶栏 + 拖拽区；折叠态时它就是整个窗。
+   整条均可拖（包括标题、未读点与空隙）；只有按钮本身不拖。 */
+.float-bar,
+.float-bar * {
+  -webkit-app-region: drag;
+}
+
+.float-bar button,
+.float-bar button * {
+  -webkit-app-region: no-drag;
+}
+
+.float-bar .float-unread {
+  /* 未读点是状态指示不是控件：跟整条一起拖 */
+  -webkit-app-region: drag;
+  pointer-events: none;
+}
+
+.float-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 6px;
+  height: 38px;
+  flex: none;
+  background: var(--bg-elevated);
+  border-bottom: 1px solid var(--border);
+  user-select: none;
+}
+
+.float-btn {
+  flex: none;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-dim);
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.float-btn:hover {
+  color: var(--text);
+  background: var(--bg-hover);
+}
+
+#float-collapse {
+  margin-left: auto;
+}
+
+.float-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--kind-task);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  /* 显式声明拖拽区：部分 Chromium 版本不把 app-region 继承到子元素，
+     标题不声明的话拖不到标题上（_required 修复「无法拖动」） */
+  -webkit-app-region: drag;
+  -webkit-user-drag: none;
+  user-select: none;
+  pointer-events: none; /* 纯展示文字：不拦拖拽，也不触发前面点条弹聊天的点击 */
+}
+
+/* 回复区右上角的折叠/展开钮：展开态贴右上角（收=向下），收起态贴输入行上方 */
+.chat-messages-btn {
+  position: absolute;
+  top: 4px;
+  right: 6px;
+  z-index: 3;
+  width: 24px;
+  height: 24px;
+  -webkit-app-region: no-drag;
+}
+
+#chat-messages-btn.locked {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+body.is-floating .chat-panel {
+  position: relative; /* absolute 定位的回复区折叠钮以此为基准 */
+}
+
+body.is-floating .chat-panel.messages-hidden .chat-messages-btn {
+  top: auto;
+  bottom: 74px; /* 收起态：贴在输入行上方（输入行 24px+padding≈74px 高） */
+}
+
+/* 收起时悬浮条上的未读点仍在，右靠（折叠钮走了） */
+
+/* AI 有新回复而消息区收着：悬浮条上的未读点 */
+.float-unread {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  margin-right: 4px;
+  border-radius: 999px;
+  background: var(--kind-event);
+  animation: chat-pending-pulse 1.4s ease-in-out infinite;
+  pointer-events: none; /* 纯状态指示：不拦截拖拽也不当按钮点 */
+  -webkit-user-drag: none;
+}
+
+/* 折叠态：窗口只剩悬浮条一条，正文与聊天全部收起。
+   背景同悬浮条：折叠后 260×40 的窗口里不容一丝黑底。
+   折叠态只保留：拖动整条 / 「⌂」回主窗口 / 「＋」展开（消息开关隐藏） */
+body.is-floating-collapsed {
+  overflow: hidden;
+  background: var(--bg-elevated);
+}
+
+body.is-floating-collapsed .main-col,
+body.is-floating-collapsed .chat-panel {
+  display: none;
+}
+
+body.is-floating-collapsed .float-bar {
+  border-bottom: none;
+  width: 100%;
+}
+
+body.is-floating-collapsed #chat-messages-btn {
+  display: none;
+}
+
+/* 折叠态下空态提示也藏掉（正文区没了，它属于正文） */
+body.is-floating-collapsed #empty-state {
+  display: none;
 }
 
 /* ---------- 顶部工具栏 ---------- */
@@ -755,6 +957,18 @@ body.is-floating .chat-composer textarea {
   align-items: center;
   gap: 8px;
   margin-top: 8px;
+}
+
+/* 输入行：textarea 在左、发送键贴在右侧同一行（不再沉在下方一整行） */
+.chat-input-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+}
+
+.chat-input-row .chat-send {
+  flex: none;
+  white-space: nowrap;
 }
 
 .chat-target {
