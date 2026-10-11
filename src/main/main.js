@@ -559,6 +559,11 @@ async function runFloatingSmoke(win, fs) {
     // 窗口级几何：页面折叠断言不验证真实窗口尺寸；这里从主进程直接折叠、
     // 量 win.getBounds() 本体（不靠页面电池隐藏），再展开恢复。
     let windowGeometry = null;
+    // 自诊断：mainColFillsWhenCollapsed 的中间量（失败时看 main-col 到底差多少）
+    let mainColProbe = null;
+    try {
+      mainColProbe = await floatingWin.webContents.executeJavaScript('window.__bujoMainColProbeDebug');
+    } catch { /* 忽略 */ }
     if (floatingWin && !floatingWin.isDestroyed()) {
       try {
         // 预热：让页面先收起回复区（回到初态，避免跟页面自检的 toggle 残留态打架）
@@ -583,6 +588,28 @@ async function runFloatingSmoke(win, fs) {
       } catch { /* 页面关得快就算了 */ }
     }
 
+    // 悬浮窗约束：不可最大化；位置记忆：拖过 + 关窗后 bounds 已落盘，下次创建回到同一处。
+    let floatingConstraints = null;
+    try {
+      if (floatingWin && !floatingWin.isDestroyed()) {
+        const maximizableOff = floatingWin.isMaximizable() === false;
+        // 拖到固定偏移再关，验证位置被记住（防抖 300ms，flush 由 close 冲刷）
+        const before = floatingWin.getBounds();
+        const moved = { x: before.x + 77, y: before.y + 41, width: before.width, height: before.height };
+        floatingWin.setBounds(moved, false);
+        floatingWin.close();
+        await new Promise((resolve) => setTimeout(resolve, 150));
+        const saved = readFloatingBounds();
+        floatingConstraints = {
+          maximizableOff,
+          boundsPersisted: Boolean(saved && saved.x === moved.x && saved.y === moved.y),
+          saved
+        };
+      }
+    } catch (err) {
+      floatingConstraints = { maximizableOff: false, boundsPersisted: false, error: err.message };
+    }
+
     if (floatingWin && !floatingWin.isDestroyed()) floatingWin.close();
     // 等主窗口被 closed 回调恢复
     await new Promise((resolve) => setTimeout(resolve, 400));
@@ -601,11 +628,14 @@ async function runFloatingSmoke(win, fs) {
       Math.abs(windowGeometry.expanded.height - FLOATING_SIZE.height) <= 14 &&
       windowGeometry.barRect.w > 0 && windowGeometry.barRect.h > 0
     );
+    const constraintsOk = Boolean(
+      floatingConstraints && floatingConstraints.maximizableOff && floatingConstraints.boundsPersisted
+    );
     const ok = Boolean(
       opened && opened.bridge &&
       stateBefore && stateBefore.floating === false &&
       toggled.ok && mainHiddenDuringFloating === true &&
-      alwaysOnTop && pageOk && geoOk && mainVisibleAfterClose === true && toggledBack
+      alwaysOnTop && pageOk && geoOk && constraintsOk && mainVisibleAfterClose === true && toggledBack
     );
 
     return {
@@ -616,8 +646,11 @@ async function runFloatingSmoke(win, fs) {
       mainHiddenDuringFloating,
       alwaysOnTop,
       page: pageReport,
+      mainColProbe,
       windowGeometry,
       geoOk,
+      floatingConstraints,
+      constraintsOk,
       mainVisibleAfterClose,
       toggledBack
     };
@@ -1030,6 +1063,56 @@ const FLOATING_SIZE = { width: 360, height: 560 };
 const FLOATING_COLLAPSED = { width: 360, height: 44 }; // 宽度不变，高度收到悬浮条一条
 
 /**
+ * 悬浮窗位置记忆：关窗（回主窗口/退出）时把 bounds 存进设置，
+ * 下次创建（切换回来、重启应用、托盘打开）时还回同一个位置。
+ * 折叠/展开不存——那只是高度变化，位置本来就不动。
+ */
+function saveFloatingBounds(win) {
+  try {
+    if (!win || win.isDestroyed()) return;
+    getSettings().save({ floatingBounds: win.getBounds() });
+  } catch { /* 设置写不进去也别影响关窗 */ }
+}
+
+/** 读出上次保存的悬浮窗位置；从未开过或值非法时返回 null */
+function readFloatingBounds() {
+  try {
+    const b = getSettings().readRaw().floatingBounds;
+    if (b && [b.x, b.y, b.width, b.height].every((n) => Number.isFinite(n))) {
+      return { x: b.x, y: b.y, width: b.width, height: b.height };
+    }
+  } catch { /* 设置读坏了按没有处理 */ }
+  return null;
+}
+
+/** 把悬浮窗放回上次的位置/大小；保存的尺寸太小（老版本数据）就只用位置 */
+function restoreFloatingBounds(win) {
+  const saved = readFloatingBounds();
+  if (!saved) return false;
+  const width = Math.max(FLOATING_SIZE.width, Math.round(saved.width));
+  const height = Math.max(FLOATING_SIZE.height, Math.round(saved.height));
+  win.setBounds({ x: Math.round(saved.x), y: Math.round(saved.y), width, height }, false);
+  return true;
+}
+
+/** 拖动时 move 会连续触发，写盘防抖在 300ms 后；关窗时 flushImmediately 冲刷 */
+let floatingBoundsSaveTimer = null;
+function queueFloatingBoundsSave(win) {
+  if (floatingBoundsSaveTimer) clearTimeout(floatingBoundsSaveTimer);
+  floatingBoundsSaveTimer = setTimeout(() => {
+    floatingBoundsSaveTimer = null;
+    saveFloatingBounds(win);
+  }, 300);
+}
+function flushFloatingBoundsSave(win) {
+  if (floatingBoundsSaveTimer) {
+    clearTimeout(floatingBoundsSaveTimer);
+    floatingBoundsSaveTimer = null;
+  }
+  saveFloatingBounds(win);
+}
+
+/**
  * 把悬浮窗切到折叠/展开形态：只调窗口高度，宽度保持不变（用户说窄条不该横着变短）。
  * 折叠态：悬浮条一条（44px）；展开态：回完整悬浮窗。窗口位置完全不动。
  * 同一个窗口内切换，页面状态（当天日记、聊天历史）不丢。
@@ -1079,6 +1162,7 @@ function createFloatingWindow() {
     alwaysOnTop: true,
     skipTaskbar: true,
     resizable: true,
+    maximizable: false, // 悬浮小窗不吃最大化（置顶小工具没有意义）
     show: !isSmokeTest,
     webPreferences: {
       preload: path.join(__dirname, '..', 'preload', 'preload.js'),
@@ -1091,12 +1175,25 @@ function createFloatingWindow() {
   // 同一个页面：渲染层用 URL 参数识别悬浮模式
   floatingWindow.loadFile(path.join(__dirname, '..', 'renderer', 'index.html'), { query: { floating: '1' } });
 
+  // 上次用过的位置/大小还回来；没存过就保持默认居中
+  restoreFloatingBounds(floatingWindow);
+
+  // 拖动/缩放结束就记位置；moved 事件 Windows/macOS 都有，move 是 Linux 兜底（多余触发只是重写一次）
+  floatingWindow.on('moved', () => queueFloatingBoundsSave(floatingWindow));
+  floatingWindow.on('move', () => queueFloatingBoundsSave(floatingWindow));
+  floatingWindow.on('resized', () => queueFloatingBoundsSave(floatingWindow));
+
   floatingWindow.webContents.setWindowOpenHandler(({ url }) => {
     if (/^https?:/i.test(url)) shell.openExternal(url);
     return { action: 'deny' };
   });
   floatingWindow.webContents.on('will-navigate', (event, url) => {
     if (url !== floatingWindow.webContents.getURL()) event.preventDefault();
+  });
+
+  floatingWindow.on('close', () => {
+    // 关窗前最后记一次位置（moved 里已防抖实时记，这里是兜底冲刷）
+    flushFloatingBoundsSave(floatingWindow);
   });
 
   floatingWindow.on('closed', () => {

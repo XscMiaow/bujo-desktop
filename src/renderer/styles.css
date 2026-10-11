@@ -153,6 +153,18 @@ body.is-floating .main-col {
   min-height: 0;
 }
 
+/* 回复区收起时：正文撑满全部余下空间（不留半屏黑区），正文过长时自己滚动。
+   同时聊天面板退回只占输入行高（不再 flex:1 平分余下空间，否则正文仍是半屏） */
+body.is-floating.floating-chat-collapsed .main-col {
+  flex: 1;
+  max-height: none;
+  overflow-y: auto;
+}
+
+body.is-floating.floating-chat-collapsed .chat-panel {
+  flex: none;
+}
+
 body.is-floating .chat-panel[hidden] {
   display: none;
 }

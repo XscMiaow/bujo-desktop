@@ -104,7 +104,16 @@ class SettingsService {
       apiKeyHint: typeof raw.apiKeyHint === 'string' ? raw.apiKeyHint : null,
       encrypted: Boolean(raw.apiKeyCipher) && this.encryptor.isAvailable(),
       encryptionAvailable: this.encryptor.isAvailable(),
-      presets: PROVIDER_PRESETS
+      presets: PROVIDER_PRESETS,
+      // 悬浮小窗上次的位置/大小（可能为 null，从未开过悬浮窗时没有）
+      floatingBounds: raw.floatingBounds && typeof raw.floatingBounds === 'object'
+        ? {
+            x: typeof raw.floatingBounds.x === 'number' ? raw.floatingBounds.x : null,
+            y: typeof raw.floatingBounds.y === 'number' ? raw.floatingBounds.y : null,
+            width: typeof raw.floatingBounds.width === 'number' ? raw.floatingBounds.width : null,
+            height: typeof raw.floatingBounds.height === 'number' ? raw.floatingBounds.height : null
+          }
+        : null
     };
   }
 
@@ -140,6 +149,14 @@ class SettingsService {
     if (typeof patch.systemPrompt === 'string') raw.systemPrompt = patch.systemPrompt;
     if (typeof patch.temperature === 'number' && Number.isFinite(patch.temperature)) {
       raw.temperature = Math.min(2, Math.max(0, patch.temperature));
+    }
+
+    // 悬浮小窗位置（bounds 才能完整恢复；只存数字，坏值直接忽略）
+    if (patch.floatingBounds && typeof patch.floatingBounds === 'object') {
+      const b = patch.floatingBounds;
+      if ([b.x, b.y, b.width, b.height].every((n) => Number.isFinite(n) && n > -16000 && n < 16000)) {
+        raw.floatingBounds = { x: Math.round(b.x), y: Math.round(b.y), width: Math.round(b.width), height: Math.round(b.height) };
+      }
     }
 
     if (typeof patch.apiKey === 'string' && patch.apiKey.trim()) {

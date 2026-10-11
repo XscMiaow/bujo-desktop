@@ -707,6 +707,8 @@ function setFloatingMessagesVisible(visible) {
       if (list) list.scrollTop = list.scrollHeight;
     }
   }
+  // 回复区收起时正文撑满余下空间（不再被 46% 上限压成半屏黑区）
+  document.body.classList.toggle('floating-chat-collapsed', !visible);
   const dot = document.getElementById('float-unread');
   if (dot) dot.hidden = visible || !chatHasUnread();
   syncFloatingMessagesButton();
@@ -769,12 +771,16 @@ window.__bujoSmokeTestFloatingPageReset = () => {
   setFloatingMessagesVisible(false);
 };
 
+// 自检调试窗口（常态为 null，只在页面自检过程中有值）：收起态正文的实测数据
+window.__bujoMainColProbeDebug = null;
+
 /**
  * 自检入口：悬浮小窗的页面形态（无边框版）。
  * 检查：悬浮条存在且带三个部件（回主窗/标题/折叠钮）、工具栏/侧栏/图例被隐藏、
  * 开始时消息区收着（只剩输入行）、折叠后只剩一条、再展开后正文回来了。
  */
 window.__bujoSmokeTestFloatingPage = async () => {
+  window.__bujoMainColProbeDebug = null; // 每次重置
   const reused = floating.reused;
   const bar = document.getElementById('float-bar');
   const toolbarHidden = getComputedStyle(document.querySelector('.toolbar')).display === 'none';
@@ -878,6 +884,32 @@ window.__bujoSmokeTestFloatingPage = async () => {
     return hiddenAfterFirstClick && visibleAfterSecondClick && composerStillAtBottom;
   })();
 
+  // 回复区收起时：正文区撑满全部余下空间（不再被 46% 上限压成半屏黑区）。
+  // 验证：收起态下聊天面板只剩输入行（flex:none），正文块 + 输入行无缝填满窗高，两块中间/底下都没有黑区。
+  const mainColFillsWhenCollapsed = (() => {
+    setFloatingMessagesVisible(false); // 收起
+    const mainCol = document.querySelector('.main-col');
+    const panel = document.getElementById('chat-panel');
+    const classOn = document.body.classList.contains('floating-chat-collapsed');
+    const mainColRect = mainCol.getBoundingClientRect();
+    const panelRect = panel.getBoundingClientRect();
+    const totalFilled = Math.abs(
+      (mainColRect.bottom + panelRect.height) - document.documentElement.clientHeight
+    ) <= 2; // 正文 + 输入行 = 全窗高（无第三块）
+    const panelStaysSmall = panelRect.height < document.documentElement.clientHeight * 0.25; // 只剩输入行，不再平分
+    window.__bujoMainColProbeDebug = {
+      classOn,
+      mainColHeight: Math.round(mainColRect.height),
+      panelHeight: Math.round(panelRect.height),
+      clientH: document.documentElement.clientHeight,
+      totalFilled,
+      panelStaysSmall
+    };
+    setFloatingMessagesVisible(true); // 展开：正文上限回 46%，类撤掉
+    const classOff = !document.body.classList.contains('floating-chat-collapsed');
+    return classOn && classOff && totalFilled && panelStaysSmall;
+  })();
+
   // 发送自动展开：chat.js 在用户发送时调 __bujoOnChatSend；这里模拟该钩子。
   // 结束时恢复初始收起态。
   const sendAutoExpand = typeof window.__bujoOnChatSend === 'function' &&
@@ -894,7 +926,7 @@ window.__bujoSmokeTestFloatingPage = async () => {
     collapsedOnlyBar && expandedAgain && messagesStillHidden &&
     composerAtBottom && barAtTop && noBlackGapUnderChat &&
     sendInlineRight && collapseAtRightEdge && collapseRightmost && canToggleMessagesManually &&
-    messagesBtnTopRight && sendAutoExpand &&
+    messagesBtnTopRight && sendAutoExpand && mainColFillsWhenCollapsed &&
     (entriesAtOpen > 0 || fileMeta.includes('还没有'))
   );
 
@@ -909,6 +941,7 @@ window.__bujoSmokeTestFloatingPage = async () => {
     sendInlineRight, // 发送键在聊天输入行右侧
     messagesBtnTopRight, // 回复区折叠钮贴回复区右上角
     sendAutoExpand, // 向 AI 发送后自动展开回复区
+    mainColFillsWhenCollapsed, // 回复区收起时正文撑满余下空间
     collapseAtRightEdge, // 折叠钮贴顶栏最右
     collapseRightmost,
     canToggleMessagesManually, // 回复区右上角钮可手动收/展开（收起时输入行仍贴底）

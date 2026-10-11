@@ -153,3 +153,20 @@ test('加密不可用时读旧密文不会崩溃，只是拿不到密钥', () =>
   assert.equal(downgraded.getForRequest().apiKey, '');
   assert.equal(downgraded.getPublic().hasApiKey, true, '仍然知道曾经配置过密钥');
 });
+
+test('悬浮窗 bounds：合法存取，非法值丢弃，没存过返回 null', () => {
+  const service = makeService(fakeEncryptor, 'bounds.json');
+  assert.equal(service.getPublic().floatingBounds, null, '从未开过悬浮窗时没有位置记录');
+
+  service.save({ floatingBounds: { x: 120, y: 80, width: 360, height: 560 } });
+  assert.deepEqual(service.getPublic().floatingBounds, { x: 120, y: 80, width: 360, height: 560 });
+
+  // 非法值（含 NaN/负尺寸/超大坐标）不入盘，旧值保留
+  service.save({ floatingBounds: { x: NaN, y: 0, width: 360, height: 560 } });
+  assert.deepEqual(service.getPublic().floatingBounds, { x: 120, y: 80, width: 360, height: 560 });
+  service.save({ floatingBounds: { x: 1e9, y: 0, width: 360, height: 560 } });
+  assert.deepEqual(service.getPublic().floatingBounds, { x: 120, y: 80, width: 360, height: 560 });
+
+  const onDisk = JSON.parse(fs.readFileSync(path.join(tmpDir, 'bounds.json'), 'utf8'));
+  assert.deepEqual(onDisk.floatingBounds, { x: 120, y: 80, width: 360, height: 560 });
+});
