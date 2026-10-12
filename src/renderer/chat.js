@@ -16,6 +16,8 @@ const chatEls = {
   panel: document.getElementById('chat-panel'),
   toggle: document.getElementById('chat-toggle'),
   close: document.getElementById('chat-close'),
+  newChat: document.getElementById('chat-new'),
+  clearScreen: document.getElementById('chat-clear-screen'),
   settingsBtn: document.getElementById('chat-settings'),
   settingsOpenBtn: document.getElementById('settings-open'),
   status: document.getElementById('chat-status'),
@@ -464,6 +466,24 @@ function appendMessage(message) {
   return message;
 }
 
+/**
+ * 开一段新对话：AI 忘掉之前的聊天上下文，从零开始。
+ * 记录气泡（messages）可以保留供回看；正在生成中的回复不能中途丢上下文，禁用。
+ * @param {object} [options]
+ * @param {boolean} [options.clearScreen=false] true 时连气泡记录也一起清掉（清屏）
+ */
+function resetConversation({ clearScreen = false } = {}) {
+  if (chatState.streaming) return;
+  chatState.history = [];
+  if (clearScreen) {
+    chatState.messages.forEach((message) => {
+      if (message.element) message.element.remove();
+    });
+    chatState.messages = [];
+  }
+  chatEls.empty.hidden = chatState.messages.length > 0;
+}
+
 function scrollChatToBottom() {
   chatEls.messages.scrollTop = chatEls.messages.scrollHeight;
 }
@@ -758,6 +778,18 @@ chatEls.input.addEventListener('keydown', (event) => {
 
 chatEls.cancel.addEventListener('click', async () => {
   if (chatState.requestId) await window.bujo.cancelChat(chatState.requestId);
+});
+
+/**
+ * 页面里凡是 id 为 chat-new / chat-clear-screen 的按钮都接到同一套重置逻辑。
+ * 主窗口在聊天头里各放一个；悬浮窗的按钮由 renderer.js 生成在悬浮条上，
+ * 两个页面共用 chat.js，Events 按 id 再查一次就都能绑上。
+ */
+document.querySelectorAll('#chat-new, #float-bar #chat-new').forEach((button) => {
+  button.addEventListener('click', () => resetConversation());
+});
+document.querySelectorAll('#chat-clear-screen, #float-bar #chat-clear-screen').forEach((button) => {
+  button.addEventListener('click', () => resetConversation({ clearScreen: true }));
 });
 
 // 「记入」改了之后，已经画出来的笔记草稿也要跟着显示新目标，预览重算

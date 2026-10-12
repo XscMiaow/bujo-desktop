@@ -9,6 +9,9 @@
  *   - [ ] 待办任务        • text   / - [ ] text
  *   - [x] 已完成          - [x] text
  *   - [-] 划去（不删原文） - [-] text
+ *     划去_note 只是把标记换成 [-]，但为了恢复时能回到原类型，
+ *     双字符标记会记下原来是什么：[-!] 曾是优先、[-n] 曾是笔记、[-e] 曾是事件。
+ *     老文件里只有 [-] 的条目恢复时按待人处理（与旧行为一致）。
  *   - [>] 迁移            - [>] text
  *   - [<] 计划            - [<] text
  *   - [!] 优先            - [!] text
@@ -42,16 +45,54 @@
     X: 'done',
     // [-] 是「划去」：条目留在文件里，只是划掉（不真删）
     '-': 'cancelled',
+    // 双字符划去标记：额外记住被划去之前的类型，恢复时不「全变回待人」
+    '-n': 'cancelled',
+    '-e': 'cancelled',
     '>': 'migrated',
     '<': 'scheduled',
-    '!': 'priority',
-    '*': 'priority'
+    // 优先是叠加标记：笔记/事件也用复刻框形式保留（[n!] 笔记+优先、[e!] 事件+优先）
+    n: 'note',
+    e: 'event',
+    // 旧版单字符写法：[!] / [*] ＝ 任务 + 优先（兼容老文件）
+    '!': 'task',
+    '*': 'task'
+  };
+
+  /** 旧版单字符写法：[!] / [*] ＝ 待办且优先（兼容老文件） */
+
+  /** 划去标记 → 被划去之前的类型（恢复「取消划去」时用它还回原符号） */
+  var CANCEL_PRIOR = {
+    '-': 'task',
+    '-n': 'note',
+    '-e': 'event'
   };
 
   // Markdown 列表项：- / * / + / 1. 都要有后续空白
   var LIST_RE = /^([ \t]*)(?:[-*+]|\d+[.)])([ \t]+)(.*)$/;
-  // 复选框：[ ]、[x]、[>] ...
-  var CHECKBOX_RE = /^\[([ xX><!*-])\]([ \t]*)(.*)$/;
+  // 复选框内ō 1–3 个字符，内容在代码里细分：
+  //   基础标记：' ' 待办 / x 完成 / >  迁移 / < 计划 / - 划去 / -n 划去笔记 / -e 划去事件
+  //   优先修饰符：后面再跟一个「!」表示这条带优先（可叠在任意基础标记上：
+  //   [x!] 完成且优先、[ -n!] 划去的优先笔记、[>!] 迁移且优先）
+  //   旧写法：[!] / [*] ＝ 待办且优先
+  var CHECKBOX_RE = /^\[([^\]]{1,3})\]([ \t]*)(.*)$/;
+  /** 复选框内塢 → { mark, priority }；不认识的写法返回 null */
+  function splitBoxMark(inner) {
+    if (inner == null) return null;
+    var mark = inner;
+    var priority = false;
+    if (mark === '!' || mark === '*') {
+      // 旧版单字符：待办 + 优先
+      return { mark: ' ', priority: true };
+    }
+    if (mark.length > 1 && mark.charAt(mark.length - 1) === '!') {
+      // 「!」修饰符：优先可叠在任意基础标记上
+      priority = true;
+      mark = mark.slice(0, -1);
+    }
+    if (mark === 'X') mark = 'x';
+    if (CHECKBOX_TO_KIND[mark] === undefined) return null;
+    return { mark: mark, priority: priority };
+  }
   // 原生子弹写法：• 任务、o 事件（o 必须是独立单词，避免 "on Monday" 被误判）
   var NATIVE_RE = /^([ \t]*)([•·○])[ \t]+(.*)$/;
   var EVENT_RE = /^([ \t]*)o[ \t]+(.*)$/;
@@ -59,7 +100,8 @@
 
   /**
    * 解析单行为子弹条目，不是子弹则返回 null。
-   * @returns {{kind:string, text:string, indent:number}|null}
+   * 划去条目会带 prior（被划去之前的类型），供「取消划去」还回原符号。
+   * @returns {{kind:string, text:string, indent:number, prior?:string}|null}
    */
   function parseBulletLine(line) {
     if (typeof line !== 'string' || line.trim() === '') return null;
@@ -74,8 +116,14 @@
       var body = m[3];
       var box = CHECKBOX_RE.exec(body);
       if (box) {
-        var kind = CHECKBOX_TO_KIND[box[1]] || 'task';
-        return { kind: kind, text: box[3].trim(), indent: indentWidth(m[1]) };
+        var split = splitBoxMark(box[1]);
+        if (split) {
+          var kind = CHECKBOX_TO_KIND[split.mark];
+          var parsed = { kind: kind, text: box[3].trim(), indent: indentWidth(m[1]) };
+          if (kind === 'cancelled') parsed.prior = CANCEL_PRIOR[split.mark] || 'task';
+          if (split.priority) parsed.priority = true;
+          return parsed;
+        }
       }
       return { kind: 'note', text: body.trim(), indent: indentWidth(m[1]) };
     }
@@ -142,7 +190,10 @@
       if (bullet) {
         flushMarkdown();
         // line：这一条在源文件里的行号（0 起）。界面靠它把操作写回正确的那一行
-        items.push({ kind: bullet.kind, text: bullet.text, indent: bullet.indent, line: i });
+        var item = { kind: bullet.kind, text: bullet.text, indent: bullet.indent, line: i };
+        if (bullet.prior) item.prior = bullet.prior;
+        if (bullet.priority) item.priority = true;
+        items.push(item);
         continue;
       }
 
@@ -167,11 +218,13 @@
   /** 统计各类子弹数量，用于顶部的「今日进度」 */
   function countStats(blocks) {
     var stats = { total: 0, task: 0, done: 0, cancelled: 0, note: 0, event: 0, migrated: 0, scheduled: 0, priority: 0 };
+    // priority 现在是叠加标记：单独为带星标的条目计数，供顶部「优先 N」小胶囊展示
     (blocks || []).forEach(function (block) {
       if (block.type !== 'bullets') return;
       block.items.forEach(function (item) {
         stats.total += 1;
         if (stats[item.kind] !== undefined) stats[item.kind] += 1;
+        if (item.priority) stats.priority += 1;
       });
     });
     stats.progress = stats.task + stats.done > 0 ? Math.round((stats.done / (stats.task + stats.done)) * 100) : 0;
@@ -181,6 +234,7 @@
   return {
     KINDS: KINDS,
     CHECKBOX_TO_KIND: CHECKBOX_TO_KIND,
+    CANCEL_PRIOR: CANCEL_PRIOR,
     parseBulletLine: parseBulletLine,
     parseDocument: parseDocument,
     countStats: countStats,

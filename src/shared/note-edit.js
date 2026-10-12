@@ -27,7 +27,26 @@
   const FENCE_RE = /^\s{0,3}(`{3,}|~{3,})/;
   const RULE_RE = /^\s*(?:-{3,}|\*{3,}|_{3,})\s*$/;
   const LIST_PREFIX_RE = /^\s*(?:[-*+]|\d+[.)])\s+/;
-  const CHECKBOX_RE = /^\s*[-*+]?\s*\[([ xX><!*-])\]\s*(.*)$/;
+  const CHECKBOX_RE = /^\s*[-*+]?\s*\[([^\]]{1,3})\]\s*(.*)$/;
+  /** 拆出复选框内咓：基础标记 + 优先谓钮（末尾的「!」）；X 归一化为小写 */
+  function splitBoxInner(inner) {
+    let mark = inner;
+    let priority = false;
+    if (mark === '!' || mark === '*') {
+      // 旧版单字符写法：待办 + 优先
+      return { mark: ' ', priority: true };
+    }
+    if (mark.length > 1 && mark.charAt(mark.length - 1) === '!') {
+      priority = true;
+      mark = mark.slice(0, -1);
+    }
+    if (mark === 'X') mark = 'x';
+    return { mark, priority };
+  }
+  /** 基础标记是否认识（与 bullet-parser 的 CHECKBOX_TO_KIND 一致，含 n/e 恢复标记） */
+  function knownMark(mark) {
+    return [' ', 'x', '-', '-n', '-e', '>', '<', 'n', 'e'].includes(mark);
+  }
   const NATIVE_RE = /^\s*[•·○]\s+/;
   const EVENT_RE = /^\s*[oO][ \t]+(?=\S)/;
 
@@ -47,11 +66,11 @@
   /** 短于这个长度的行不用「包含」关系来判断（「写周报」不该匹配「先写周报」） */
   const CONTAIN_MIN = 4;
 
-  /** 归一化：去掉列表符号、复选框、Markdown 记号、空白与标点，只留可比对的内容 */
+  /** 归一化：去掉列表符号、复选框（含 [-n]/[-e]/[-!] 这类双字符划去标记）、Markdown 记号、空白与标点，只留可比对的内容 */
   function normalizeForMatch(line) {
     return String(line == null ? '' : line)
       .replace(/^\s*(?:[-*+]|\d+[.)])\s+/, '')
-      .replace(/^\s*[-*+]?\s*\[[ xX><!*-]\]\s*/, '')
+      .replace(/^\s*[-*+]?\s*\[[^\]]{1,3}\]\s*/, '')
       .replace(/^\s*[•·○]\s*/, '')
       .replace(/^\s*[oO][ \t]+(?=\S)/, '')
       .replace(/[*_`#]/g, '')
@@ -90,15 +109,20 @@
     return similarity(a, b);
   }
 
-  /** 拆分复选框条目：{ indent, mark, text }；不是复选框条目则返回 null */
+  /** 拆分复选框条目：{ indent, mark, text }；不是复选框条目则返回 null。
+   * 划去的双字符标记（[-!] / [-n] / [-e]）原样进 mark，供恢复时判断原类型。 */
   function boxParts(line) {
     const match = CHECKBOX_RE.exec(String(line || ''));
     if (!match) return null;
+    const split = splitBoxInner(match[1]);
+    if (!knownMark(split.mark)) return null;
     const indent = /^\s*/.exec(line)[0];
-    return { indent, mark: match[1] === 'X' ? 'x' : match[1], text: match[2].trim() };
+    const parts = { indent, mark: split.mark, text: match[2].trim() };
+    if (split.priority) parts.priority = true;
+    return parts;
   }
 
-  /** 把任意写法的一行规范成子弹条目，保留缩进 */
+  /** 把任意写法的一行规范成子弹条目，保留缩进与优先修饰符 */
   function asBulletLine(text, indent) {
     let body = String(text == null ? '' : text)
       .trim()
@@ -107,10 +131,13 @@
       .replace(/^[•·○]\s+/, '');
 
     let marker = '';
-    const box = /^\[([ xX><!*-])\]\s*(.*)$/.exec(body);
+    const box = /^\[([^\]]{1,3})\]\s*(.*)$/.exec(body);
     if (box) {
-      marker = `[${box[1] === 'X' ? 'x' : box[1]}] `;
-      body = box[2].trim();
+      const split = splitBoxInner(box[1]);
+      if (knownMark(split.mark)) {
+        marker = `[${split.mark}${split.priority ? '!' : ''}] `;
+        body = box[2].trim();
+      }
     }
 
     if (!body && !marker) return '';
@@ -120,7 +147,7 @@
   /** 去掉列表符号与复选框，只留正文 */
   function bulletBody(line) {
     return asBulletLine(line, '')
-      .replace(/^- (?:\[[ xX><!*-]\]\s*)?/, '')
+      .replace(/^- (?:\[[^\]]{1,3}\]\s*)?/, '')
       .replace(EVENT_RE, '')
       .trim();
   }
@@ -132,15 +159,74 @@
   }
 
   /**
-   * 改写一条条目的标记，保留缩进与正文：
-   *   ' ' 待办 / 'x' 完成 / '-' 划去
+   * 改写一条条目的标记，保留缩进、正文与优先修饰符。
+   *
+   * mark 只是基础标记（' ' 待办 / 'x' 完成 / '-' 划去 / '-n' 划去笔记 / '-e' 划去事件 /
+   * '-n!' '-e!' '-!' 带优先的划去 / 'n' 恢复成笔记 / 'e' 恢复成事件 / '!' 旧版优先待办）；
+   * mark 自带「!」时表示「不管原行有没有优先，写回的结果都带优先」；
+   * 原行带优先而 mark 没带时优先照样保留——完成/划去/恢复都不会把「这是优先事项」丢掉。
    */
   function setMark(line, mark) {
     const box = boxParts(line);
+    // mark 末尾的「!」是「强制带优先」的指令：剥掉它之后基础标记才参与类型判断
+    let forcedPriority = mark.length > 1 && mark.charAt(mark.length - 1) === '!';
+    let baseMark = forcedPriority ? mark.slice(0, -1) : mark;
+    // 旧版恢复指令「!」＝ 待办 + 优先
+    if (baseMark === '!') {
+      forcedPriority = true;
+      baseMark = ' ';
+    }
+    // 「p」＝ 只去掉优先标志，基础标记保持原样。
+    // 先抹掉原行的优先（临时去掉内文里的 !），再按基础标记重写，这样递归不会把优先又加回来。
+    if (baseMark === 'p') {
+      if (!box || !box.priority) return line.trimEnd();
+      const stripped = box.indent + line.trim().slice(box.indent.length).replace(/^(- \[)\s*[^\]]*(!?)\]/, '$1' + box.mark + ']');
+      return setMark(stripped, box.mark === ' ' ? ' ' : box.mark);
+    }
+    // 「+!」＝ 保持原类型，只加星（待办/笔记/事件/完成都可加优先标志，划去态也一样保留）
+    if (baseMark === '+') {
+      if (box) {
+        // 复选框行：在原提示上补 !（[-n] → [-n!]，[-] → [-!]，[ ] → [!]，[x] → [x!] ……）
+        // 空格基础用旧版单字符 [!]（parser 读作「待办且优先」，避免写出 [ !]）
+        const mark = box.mark === ' ' ? '' : box.mark;
+        return `${box.indent}- [${mark}!] ${bulletBody(line)}`.trimEnd();
+      }
+      // 没有复选框的原生行：笔记用 [n!] 承载；事件用 [e!]
+      return EVENT_RE.test(String(line)) ? setMark(line, 'e!') : setMark(line, 'n!');
+    }
+    const priority = forcedPriority || Boolean(box && box.priority);
     const indent = box ? box.indent : (/^\s*/.exec(String(line == null ? '' : line)) || [''])[0];
     const body = bulletBody(line);
     if (!body) return '';
-    return `${indent}- [${mark}] ${body}`.trimEnd();
+    // 优先是叠加标记：完成/划去/恢复都不丢——n/e 恢复时原本带优先就留在复选框里
+    //（[n!] / [e!]，parser 读作笔记/事件 + 优先；不带优先则回到原生行写法）
+    if (baseMark === 'n') {
+      return priority ? `${indent}- [n!] ${body}`.trimEnd() : `${indent}- ${body}`.trimEnd();
+    }
+    if (baseMark === 'e') {
+      return priority ? `${indent}- [e!] ${body}`.trimEnd() : `${indent}o ${body}`.trimEnd();
+    }
+    // 泛化划去（mark === '-'）：从当前标记推「曾是」什么（[n!] → [-n!]，[e!] → [-e!]），
+    // 再叠上优先修饰符，恢复时两头信息都不丢
+    let cancelBase = baseMark;
+    if (baseMark === '-' && box) {
+      if (box.mark === 'n') cancelBase = '-n';
+      else if (box.mark === 'e') cancelBase = '-e';
+      else if (box.mark === '-') cancelBase = '-'; // 已是划去态重划一次：不动原提示
+      else cancelBase = box.mark === 'x' ? '-' : '-';
+      // 优先永远跟着走；[-!] / [-n!] / [-e!] 都是这个约定
+    }
+    if (baseMark === '-' && cancelBase !== '-') {
+      return `${indent}- [${cancelBase}${priority ? '!' : ''}] ${body}`.trimEnd();
+    }
+    // 已是划去态又划一次：保留原来的提示（[-n] 重划仍是 [-n]，[-n!] 仍是 [-n!]）
+    if (baseMark === '-' && box && ['-n', '-e'].includes(box.mark)) {
+      return `${indent}- [${box.mark}${priority ? '!' : ''}] ${body}`.trimEnd();
+    }
+    // 待办 + 优先时借用旧版单字符写法 [!]（parser 兼容读作「待办且优先」），
+    // 避免写出 [ !] 这种空格标记，别的工具看着也自然
+    if (baseMark === ' ' && priority) return `${indent}- [!] ${body}`.trimEnd();
+    return `${indent}- [${baseMark}${priority ? '!' : ''}] ${body}`.trimEnd();
   }
 
   function markTask(line) {
@@ -185,7 +271,7 @@
       const body = line
         .trim()
         .replace(LIST_PREFIX_RE, '')
-        .replace(/^\[[ xX><!*-]\]\s*/, '')
+        .replace(/^\[[^\]]{1,3}\]\s*/, '')
         .trim();
       if (!body) continue;
 

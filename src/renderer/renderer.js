@@ -108,9 +108,16 @@ function entryAction(act, label, title) {
   return button;
 }
 
+/** 恢复到某种类型的标记：任务系用复选框字符，笔记/事件回到原符号 */
+const RESTORE_MARKS = { task: ' ', note: 'n', event: 'e' };
+
+/** 划去时写入的带提示标记；优先是叠加位，会自动跟着写回 [-!]/[-n!] 等 */
+const CANCEL_MARKS = { task: '-', note: '-n', event: '-e' };
+
 /**
- * 手工操作：待办可以「完成」或「划去」；已完成的可以「取消完成」或「划去」；
- * 已经划去的可以「恢复为待办」。划去只改标记，原文一直留在文件里。
+ * 手工操作：待办可以「完成」；划去的恢复回**原来的类型**（笔记/事件 → 原符号，待办 → 待办）；
+ * 优先是叠加标记：任何类型都能加/去星标（★），完成/划去/恢复都不丢；
+ * 划去只改标记，原文一直留在文件里。
  */
 function buildEntryActions(item) {
   const acts = document.createElement('span');
@@ -119,13 +126,24 @@ function buildEntryActions(item) {
   if (item.kind === 'done') {
     acts.append(entryAction('restore', '取消完成', '改回待办'));
   } else if (item.kind === 'cancelled') {
-    acts.append(entryAction('restore', '恢复', '恢复为待办'));
+    const back = item.prior || 'task';
+    const labelMeta = Bujo.KINDS[back] || Bujo.KINDS.task;
+    acts.append(entryAction('restore', `恢复为${labelMeta.label}`, `恢复为${labelMeta.label}（不是一律变回待办）`));
   } else if (TASK_LIKE.has(item.kind)) {
     acts.append(entryAction('done', '完成', '标记为已完成'));
   }
 
+  // 优先开关：任意类型（含已完成/计划/迁移）都能 ★；划去态也保留原优先，可去可加
+  acts.append(
+    entryAction(
+      'priority',
+      item.priority ? '去★' : '★',
+      item.priority ? '取消优先标记（其他标记不变）' : '标记为优先事项（叠加标记，随完成/划去一起保留）'
+    )
+  );
+
   if (item.kind !== 'cancelled') {
-    acts.append(entryAction('cancel', '划去', '划去这一条（原文保留在笔记里）'));
+    acts.append(entryAction('cancel', '划去', '划去这一条（原文保留在笔记里；恢复时仍能回到原类型）'));
   }
 
   return acts;
@@ -136,11 +154,24 @@ function buildBulletList(block) {
   const ul = document.createElement('ul');
   ul.className = 'bujo-list';
 
-  block.items.forEach((item) => {
+  // [-] 划去条目排到列表末尾独立成一区；[!] 优先留在原位（样式上单独突出）
+  const ordered = [
+    ...block.items.filter((item) => item.kind !== 'cancelled'),
+    ...block.items.filter((item) => item.kind === 'cancelled')
+  ];
+
+  ordered.forEach((item) => {
     const meta = Bujo.KINDS[item.kind] || Bujo.KINDS.note;
     const li = document.createElement('li');
     li.className = `bujo-entry ${meta.cls}`;
     li.dataset.kind = item.kind;
+    // 优先是叠加标记：任意类型都能带（样式突出 + 星标开关都看它）
+    if (item.priority) {
+      li.classList.add('is-priority');
+      li.dataset.priority = '1';
+    }
+    // 划去条目的「之前类型」：恢复时要回到原符号，而不是一律变回待办
+    if (item.prior) li.dataset.prior = item.prior;
     // 行号与正文：改标记时靠它们精准找到文件里的那一行
     li.dataset.line = String(item.line);
     li.dataset.text = item.text;
@@ -153,6 +184,15 @@ function buildBulletList(block) {
     glyph.className = 'bujo-glyph';
     glyph.textContent = meta.glyph;
     glyph.title = meta.label;
+
+    // 优先居标：紧跟主符号后面的一个金色 ★，任何类型上都能看到
+    if (item.priority) {
+      const star = document.createElement('span');
+      star.className = 'bujo-star';
+      star.textContent = '★';
+      star.title = '优先事项';
+      glyph.after(star);
+    }
 
     const text = document.createElement('span');
     text.className = 'bujo-text';
@@ -297,9 +337,33 @@ function clearError() {
 
 /* ---------------- 手工改条目状态 ---------------- */
 
-/** 按钮上的动作 → 写进文件的标记 */
-const ACT_MARKS = { done: 'x', cancel: '-', restore: ' ' };
-const STATE_LABELS = { task: '待办', done: '已完成', cancelled: '已划去（原文保留）' };
+/**
+ * 动作 → 写进文件的标记。
+ * 恢复/划去按「原来是什么」映射（划去待办是 [-]，划去笔记/事件用双字符提示）；
+ * 优先是叠加位：主进程在 setMark 里根据原行的 priority 自动补/去「!」尾缀（[-!] / [-n!] / [x!]）。
+ */
+function markForAction(entry, act) {
+  const kind = entry.dataset.kind;
+  const prior = entry.dataset.prior || 'task';
+  const hasPriority = entry.dataset.priority === '1';
+  if (act === 'done') return 'x';
+  if (act === 'priority') return hasPriority ? 'p' : '+'; // 'p' 去星（类型不变）；'+' 加星（类型不变）
+  if (act === 'cancel') return CANCEL_MARKS[prior] || '-';
+  if (act === 'restore') {
+    // 取消完成 → 改回待办；setMark 会保留原行已有的优先标志（[x!] 恢复回 [!]）
+    if (kind === 'done') return ' ';
+    return RESTORE_MARKS[prior] || ' '; // 取消划去 → 回到原来的类型
+  }
+  return null;
+}
+const STATE_LABELS = {
+  task: '待办',
+  done: '已完成',
+  cancelled: '已划去（原文保留）',
+  note: '笔记',
+  event: '事件',
+  priority: '优先事项'
+};
 
 let toastTimer = null;
 
@@ -322,7 +386,7 @@ function showToast(message) {
  */
 async function applyBulletAction(act) {
   const entry = act.closest('.bujo-entry');
-  const mark = ACT_MARKS[act.dataset.act];
+  const mark = entry && markForAction(entry, act.dataset.act);
   if (!entry || !mark || !state.file) return;
 
   const buttons = [...entry.querySelectorAll('.bujo-act')];
@@ -611,6 +675,8 @@ function applyFloatingMode() {
   bar.className = 'float-bar'; // 样式全部走 .float-bar 类（此前只有 id，样式规则没命中 → 整条不可拖、折叠钮不靠右、间距丢失）
   bar.innerHTML = [
     '<button id="float-back" class="float-btn" type="button" title="回主窗口">⌂</button>',
+    '<button id="chat-new" class="float-btn" type="button" title="新建对话（AI 忘掉之前的聊天）">＋</button>',
+    '<button id="chat-clear-screen" class="float-btn" type="button" title="清屏（只清这扇窗口，上下文还继续）">⌫</button>',
     '<span id="float-title" class="float-title" draggable="false">• 今日要点</span>',
     '<span id="float-unread" class="float-unread" hidden></span>',
     '<button id="float-collapse" class="float-btn" type="button" title="折叠成同宽窄条 / 展开完整悬浮窗">−</button>'
@@ -980,7 +1046,7 @@ async function waitEntryKind(text, kind, timeout = 3000) {
 
 /**
  * 自检入口 3：真的去点条目上的「完成 / 划去 / 恢复」，验证写回文件的那一行。
- * 线序：待办 → 完成；普通笔记 → 划去；待办 → 划去 → 恢复；已划去的只能恢复。
+ * 线序：待办 → 完成；普通笔记 → 划去 → 恢复回笔记；待办 → 划去 → 恢复；已划去的只能恢复。
  */
 window.__bujoSmokeTestMarks = async () => {
   const steps = [];
@@ -1002,6 +1068,10 @@ window.__bujoSmokeTestMarks = async () => {
   await step('整理收件箱', 'cancel', 'cancelled');
   await step('买牛奶', 'cancel', 'cancelled');
   await step('买牛奶', 'restore', 'task');
+  // 划去的笔记恢复时回到**原来的类型**（笔记），不是变回待办
+  await step('整理收件箱', 'restore', 'note');
+  // 这条划了就不再恢复：留给文件层核对中间态 [-n]
+  await step('回顾设计稿', 'cancel', 'cancelled');
 
   // 已经划去的条目：只给「恢复」，不给「划去」
   const already = findEntryByText('已经划去的老条目');
@@ -1037,7 +1107,8 @@ window.__bujoSmokeTestMarks = async () => {
   const toastShown = Boolean(toastText) && !els.toast.hidden;
 
   return {
-    ok: steps.every((item) => item.ok) && alreadyActs.join(',') === 'restore' && layoutOk && toastShown,
+    // 已划去条目只能「恢复」与「星标」，不能再「划去」（也不该出现在末尾区）
+    ok: steps.every((item) => item.ok) && alreadyActs.join(',') === 'restore,priority' && layoutOk && toastShown,
     steps,
     alreadyActs,
     inventory,

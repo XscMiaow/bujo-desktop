@@ -8,8 +8,28 @@ const { parseBulletLine } = require('../shared/bullet-parser.js');
 const { parseEditBlock, integrate, normalizeForMatch, matchScore, setMark } = require('../shared/note-edit.js');
 const { submit, withFileLock } = require('./write-queue');
 
-/** 手工改标记时允许的状态 */
-const BULLET_MARKS = { ' ': 'task', x: 'done', '-': 'cancelled' };
+/**
+ * 手工改标记时允许的值。
+ * 单字符：' ' 待办 / 'x' 完成 / '-' 划去（退回旧值，等价于划去待办）。
+ * 双字符划去 [-!] / [-n] / [-e]：划去某个 具体类型（优先 / 笔记 / 事件），
+ * 恢复时能回到原符号，而不是一律变回待办。
+ * 恢复动作：'n' 要点、'e' 事件、'!' 优先。
+ */
+const BULLET_MARKS = {
+  ' ': 'task',
+  x: 'done',
+  '-': 'cancelled',
+  '-!': 'cancelled',
+  '-n': 'cancelled',
+  '-e': 'cancelled',
+  '-n!': 'cancelled',
+  '-e!': 'cancelled',
+  n: 'note',
+  e: 'event',
+  '!': 'task', // 旧版「恢复为优先事项」＝ 待办 + 优先（现在优先是叠加标记）
+  '+': 'priority-toggle', // 界面「★」按钮：保持类型，只加星（+! 由界面发送时再叠优先）
+  p: 'unchanged' // 只去掉优先标志，基础标记不变（界面「去★」按钮）
+};
 
 /** 目标路径是否在某个目录内（用于把写入限制在日记目录里） */
 function isInsideDirectory(childPath, dirPath) {
@@ -185,12 +205,34 @@ async function setBulletMark(filePath, target = {}) {
       if (index === -1 || normalizeForMatch(lines[index]) !== wanted) index = locateBullet(lines, wanted);
 
       const before = lines[index];
-      if (!parseBulletLine(before)) throw new Error('这一行已经不是条目了，已重新载入');
+      const parsed = parseBulletLine(before);
+      if (!parsed) throw new Error('这一行已经不是条目了，已重新载入');
 
-      const after = setMark(before, mark);
+      // 划去时写入「之前是什么」的提示（[-!]/[-n]/[-e]，优先再补一个 !：[-n!] 等），
+      // 恢复时能回到原类型；显式的带提示标记（如 -n、-n!）优先于自动推断。
+      let markToUse = mark;
+      if (mark === '-') {
+        const base = parsed.kind === 'note' ? '-n' : parsed.kind === 'event' ? '-e' : '-';
+        // 优先是叠加标记：只要原条目带着 priority 标志（含旧版 [!]/[*]），
+        // 划去标记在「-n/-e/-」之上再叠「!」（[-n!] 优先笔记被划去；[-!] 优先待办被划去）
+        markToUse = parsed.priority ? `${base}!` : base;
+      }
+      // 「★」按钮：保持原类型，只加优先标志 → 用基础标记 + 强制「!」
+      //（[ ] → [!]、[x] → [x!]、原生笔记 → [n!]、事件 → [e!]、[-n] → [-n!]）
+      if (mark === '+') {
+        markToUse = '+!';
+      }
+      const after = setMark(before, markToUse);
       if (!after) throw new Error('这一条没有可比对的内容');
 
-      const info = { path: resolved, name: path.basename(resolved), line: index, before, after, state: BULLET_MARKS[mark] };
+      const info = {
+        path: resolved,
+        name: path.basename(resolved),
+        line: index,
+        before,
+        after,
+        state: BULLET_MARKS[markToUse] || BULLET_MARKS[mark]
+      };
       if (after === before) return { ...info, changed: false };
 
       lines[index] = after;

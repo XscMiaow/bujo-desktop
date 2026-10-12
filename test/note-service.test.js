@@ -126,7 +126,7 @@ test('readNote 读不到就报错，不返回空字符串', async () => {
 });
 
 
-test('手工改标记：完成 / 划去 / 恢复，都只改那一行', async () => {
+test('手工改标记：完成 / 划去 / 恢复，都只改那一行；划去笔记会带回「曾是笔记」的提示', async () => {
   const file = path.join(tmpDir, 'marks.md');
   await fs.writeFile(file, '# 笔记\n\n- [ ] 写周报\n- 整理收件箱\n  - [!] 子任务\n', 'utf8');
 
@@ -135,18 +135,75 @@ test('手工改标记：完成 / 划去 / 恢复，都只改那一行', async ()
   assert.equal(done.state, 'done');
   assert.equal(done.after, '- [x] 写周报');
 
+  // 划去一条笔记：写成 [-n]（曾是笔记），恢复时能回原类型而不是变待办
   const cancelled = await setBulletMark(file, { line: 3, text: '整理收件箱', mark: '-' });
-  assert.equal(cancelled.after, '- [-] 整理收件箱');
+  assert.equal(cancelled.after, '- [-n] 整理收件箱');
+  assert.equal(cancelled.state, 'cancelled');
 
   const restored = await setBulletMark(file, { line: 4, text: '子任务', mark: ' ' });
-  assert.equal(restored.after, '  - [ ] 子任务', '缩进保留');
+  // 「子任务」原本写的是 [!]（任务+优先的叠加标记）：恢复待办后优先照旧保留
+  assert.equal(restored.after, '  - [!] 子任务', '缩进保留，优先叠加标记也不丢');
+
+  // 划去的笔记恢复成笔记，不是待办
+  const noteBack = await setBulletMark(file, { line: 3, text: '整理收件箱', mark: 'n' });
+  assert.equal(noteBack.after, '- 整理收件箱', '恢复成笔记条目，不带复选框');
+  assert.equal(noteBack.state, 'note');
 
   const content = await fs.readFile(file, 'utf8');
   assert.equal(
     content,
-    ['# 笔记', '', '- [x] 写周报', '- [-] 整理收件箱', '  - [ ] 子任务', ''].join('\n'),
-    '一行都没删，只改了三处的标记'
+    ['# 笔记', '', '- [x] 写周报', '- 整理收件箱', '  - [!] 子任务', ''].join('\n'),
+    '一行都没删，只改了几处的标记'
   );
+});
+
+test('划去优先事项写成 [-!]，恢复时回到 [!] 而不是待办', async () => {
+  const file = path.join(tmpDir, 'marks-priority.md');
+  await fs.writeFile(file, '- [!] 完成原型\n', 'utf8');
+
+  const cancelled = await setBulletMark(file, { line: 0, text: '完成原型', mark: '-' });
+  assert.equal(cancelled.after, '- [-!] 完成原型', '优先事项划去时记住原类型');
+
+  const restored = await setBulletMark(file, { line: 0, text: '完成原型', mark: '!' });
+  assert.equal(restored.after, '- [!] 完成原型', '恢复成优先事项');
+});
+
+test('优先是叠加标记：完成/划去/恢复全程保留，任意类型可带，可单独去掉', async () => {
+  const file = path.join(tmpDir, 'marks-priority-flag.md');
+  // 完成的优先事项 → 划去 → 恢复成待办：星标一路跟随
+  await fs.writeFile(file, '- [x!] 交付原型\n', 'utf8');
+  const cancel = await setBulletMark(file, { line: 0, text: '交付原型', mark: '-' });
+  assert.equal(cancel.after, '- [-!] 交付原型', '划去不丢优先');
+  const restore = await setBulletMark(file, { line: 0, text: '交付原型', mark: ' ' });
+  assert.equal(restore.after, '- [!] 交付原型', '恢复后优先还在');
+  const done = await setBulletMark(file, { line: 0, text: '交付原型', mark: 'x' });
+  assert.equal(done.after, '- [x!] 交付原型', '完成也不丢');
+
+  // 单独去星：[x!] → [x]，基础标记不变
+  const strip = await setBulletMark(file, { line: 0, text: '交付原型', mark: 'p' });
+  assert.equal(strip.after, '- [x] 交付原型', '去优先只去 !，类型不变');
+
+  // 再加回来：任意类型可以加星（保持类型，只加优先标志）
+  const add = await setBulletMark(file, { line: 0, text: '交付原型', mark: '+' });
+  assert.equal(add.after, '- [x!] 交付原型', '重新标星');
+
+  // 优先笔记的完整循环：[·笔记]→划去→恢复，两边都带优先
+  await fs.writeFile(file, '- [n!] 优先笔记\n', 'utf8');
+  const cn = await setBulletMark(file, { line: 0, text: '优先笔记', mark: '-' });
+  assert.equal(cn.after, '- [-n!] 优先笔记', '双字符提示与优先双保留');
+  const rn2 = await setBulletMark(file, { line: 0, text: '优先笔记', mark: 'n' });
+  assert.equal(rn2.after, '- [n!] 优先笔记', '恢复成笔记且优先还在');
+});
+
+test('划去事件写成 [-e]，恢复时回到 o 事件行', async () => {
+  const file = path.join(tmpDir, 'marks-event.md');
+  await fs.writeFile(file, 'o 下午三点评审\n', 'utf8');
+
+  const cancelled = await setBulletMark(file, { line: 0, text: '下午三点评审', mark: '-' });
+  assert.equal(cancelled.after, '- [-e] 下午三点评审');
+
+  const restored = await setBulletMark(file, { line: 0, text: '下午三点评审', mark: 'e' });
+  assert.equal(restored.after, 'o 下午三点评审', '恢复成事件');
 });
 
 
@@ -166,10 +223,10 @@ test('行号偏了按内容找回；找不到或两条一样就拒绝，绝不�
   const file = path.join(tmpDir, 'marks-stale.md');
   await fs.writeFile(file, '# 笔记\n\n- [ ] 写周报\n- 整理收件箱\n', 'utf8');
 
-  // 行号给错（文件在外部被改过），但内容对得上：找回来
+  // 行号给错（文件在外部被改过），但内容对得上：找回来。它是笔记，划去记成 [-n]
   const found = await setBulletMark(file, { line: 0, text: '整理收件箱', mark: '-' });
   assert.equal(found.changed, true);
-  assert.equal(found.after, '- [-] 整理收件箱');
+  assert.equal(found.after, '- [-n] 整理收件箱');
 
   await assert.rejects(() => setBulletMark(file, { line: 1, text: '不存在的事', mark: 'x' }), /找不到这一条/);
   await assert.rejects(() => setBulletMark(file, { line: 1, text: '写周报', mark: '?' }), /不支持的标记/);

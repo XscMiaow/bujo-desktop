@@ -27,6 +27,35 @@ body {
   margin: 0;
 }
 
+/* ---------- 滚动条：宽滑条换成一条灰色细竖线 ---------- */
+
+* {
+  scrollbar-width: thin; /* Firefox 兜底 */
+  scrollbar-color: #33384a transparent;
+}
+
+::-webkit-scrollbar {
+  width: 4px;
+  height: 4px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #33384a;
+  border-radius: 2px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #454c63;
+}
+
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
 body {
   display: flex;
   flex-direction: column;
@@ -1298,11 +1327,29 @@ body.is-floating-collapsed #empty-state {
   border-radius: 0 6px 6px 0;
 }
 
-.bujo-entry:hover {
-  background: #1d21295b;
+/* [!] 优先是叠加标记：金 ★ 跟在主符号后面，任意类型都可带 */
+.bujo-star {
+  flex: none;
+  color: var(--kind-priority);
+  font-size: 12px;
+  line-height: 1.7;
+  user-select: none;
 }
 
-/* 条目右侧的手工操作：平时淡一点，鼠标移上去或键盘聚焦时才显眼 */
+/* [!] 优先 / [-] 划去：额外占位，与普通条目区隔开 */
+.bujo-entry.is-cancelled,
+.bujo-entry.is-priority {
+  margin-top: 8px;
+}
+
+/* [!] 优先：更粗的左条 + 淡色背景把它独立出来 */
+.bujo-entry.is-priority {
+  border-left: 5px solid var(--kind-priority);
+  background: #e0af680d;
+}
+.bujo-entry.is-priority:hover {
+  background: #e0af681a;
+}
 .bujo-acts {
   flex: none;
   display: flex;
@@ -1391,11 +1438,17 @@ body.is-floating-collapsed #empty-state {
   color: var(--kind-cancelled);
 }
 
-/* 划去：条目留在文件里，只是划掉 */
+/* 划去：条目留在文件里，只是划掉；底色更暗，视觉上独立成「不再做」的一区 */
 .bujo-entry.is-cancelled .bujo-text {
   color: #6b7280;
   text-decoration: line-through;
   text-decoration-color: #8d94a8aa;
+}
+.bujo-entry.is-cancelled {
+  background: #12141bcc;
+}
+.bujo-entry.is-cancelled:hover {
+  background: #171a24;
 }
 
 .bujo-entry.is-migrated {
@@ -1415,14 +1468,13 @@ body.is-floating-collapsed #empty-state {
   color: var(--kind-scheduled);
 }
 
-.bujo-entry.is-priority {
-  border-left-color: var(--kind-priority);
-}
 .bujo-entry.is-priority .bujo-glyph {
   color: var(--kind-priority);
+  font-size: 16px;
 }
 .bujo-entry.is-priority .bujo-text {
   font-weight: 600;
+  font-size: 1.04em;
 }
 
 .bujo-entry.is-event {

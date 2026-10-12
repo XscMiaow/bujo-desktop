@@ -13,10 +13,52 @@ test('识别 Markdown 复选框为对应的子弹类型', () => {
   assert.equal(parseBulletLine('- [X] 大写也算完成').kind, 'done');
   assert.equal(parseBulletLine('- [>] 迁移').kind, 'migrated');
   assert.equal(parseBulletLine('- [<] 计划').kind, 'scheduled');
-  assert.equal(parseBulletLine('- [!] 优先').kind, 'priority');
+  // 优先是叠加标记：不再是一种独立类型（旧写法 [!] ＝ 任务 + 优先）
+  const legacyPrio = parseBulletLine('- [!] 优先');
+  assert.equal(legacyPrio.kind, 'task');
+  assert.equal(legacyPrio.priority, true);
   // 划去：条目还在，只是划掉（不是删除）
   assert.equal(parseBulletLine('- [-] 不做了').kind, 'cancelled');
   assert.equal(parseBulletLine('- [-] 不做了').text, '不做了', '正文照旧能读出来');
+});
+
+test('优先修饰符可叠在任意基础标记上，完成/划去/恢复都不丢', () => {
+  // 旧写法兼容
+  assert.equal(parseBulletLine('- [*] 旧星').priority, true);
+  // 新写法：基础标记 + 可选的「!」
+  const donePrio = parseBulletLine('- [x!] 完成的优先事项');
+  assert.equal(donePrio.kind, 'done');
+  assert.equal(donePrio.priority, true);
+  const migratePrio = parseBulletLine('- [>!] 迁移且优先');
+  assert.equal(migratePrio.kind, 'migrated');
+  assert.equal(migratePrio.priority, true);
+  // 划去的优先笔记 / 优先事件：提示与优先双保留
+  const cancelledPrioNote = parseBulletLine('- [-n!] 划掉的优先笔记');
+  assert.equal(cancelledPrioNote.kind, 'cancelled');
+  assert.equal(cancelledPrioNote.prior, 'note');
+  assert.equal(cancelledPrioNote.priority, true);
+  const cancelledPrioTask = parseBulletLine('- [-!] 划掉的优先待办');
+  assert.equal(cancelledPrioTask.prior, 'task');
+  assert.equal(cancelledPrioTask.priority, true);
+  // 优先笔记 / 优先事件用复选框载体表达
+  const prioNote = parseBulletLine('- [n!] 优先笔记');
+  assert.equal(prioNote.kind, 'note');
+  assert.equal(prioNote.priority, true);
+  const prioEvent = parseBulletLine('- [e!] 优先事件');
+  assert.equal(prioEvent.kind, 'event');
+  assert.equal(prioEvent.priority, true);
+  // 不带「!」的普通标记没有优先标志
+  assert.equal(parseBulletLine('- [x] 普通完成').priority, undefined);
+  // 未知内文不是复选框，回退成笔记
+  assert.equal(parseBulletLine('- [zz] 未知').kind, 'note');
+});
+
+test('统计：优先是叠加位，单独计数', () => {
+  const { stats } = parseDocument('- [!] 忙的事\n- [x!] 完成且优先\n- [ ] 待办\n- [x] 完成\n');
+  // stats.priority 现在表示「带星标的条目数」（不管是什么基础类型）
+  assert.equal(stats.priority, 2);
+  assert.equal(stats.task, 2, '[!] 与 [ ] 都计入待办');
+  assert.equal(stats.done, 2);
 });
 
 test('每个条目都带上它在源文件里的行号（界面靠它写回正确的那一行）', () => {
@@ -113,9 +155,11 @@ test('真实示例文件能解析出各类子弹', () => {
   assert.ok(blocks.some((b) => b.type === 'markdown' && b.text.includes('# 2026 年 10 月')), '标题被保留为 markdown 块');
   const items = blocks.filter((b) => b.type === 'bullets').flatMap((b) => b.items);
   const kinds = new Set(items.map((i) => i.kind));
-  ['task', 'done', 'cancelled', 'migrated', 'scheduled', 'priority', 'note', 'event'].forEach((kind) => {
+  ['task', 'done', 'cancelled', 'migrated', 'scheduled', 'note', 'event'].forEach((kind) => {
     assert.ok(kinds.has(kind), `示例文件缺少 ${kind} 类型`);
   });
+  // 示例里的 [!] 属于「任务+优先」叠加，不再是独立类型
+  assert.ok(items.some((i) => i.priority === true), '示例文件至少有一条带星标的条目');
   assert.equal(items.filter((i) => i.text.includes('代码块里的减号')).length, 0, '示例里的代码块不应产生子弹');
   assert.ok(stats.task > 0 && stats.done > 0);
 });

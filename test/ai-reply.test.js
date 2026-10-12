@@ -159,12 +159,30 @@ test('小标题写法也认得改动块（模型不写标签时的容错）', ()
 });
 
 test('协议里教给模型的符号就是解析器真正认识的符号', () => {
-  // 与 bullet-parser 的 KINDS 对应：待办 / 完成 / 迁移 / 计划 / 优先 / 笔记 / 事件
-  for (const symbol of ['- [ ] ', '- [x] ', '- [>] ', '- [<] ', '- [!] ', '- ', 'o ']) {
+  // 与 bullet-parser 的 KINDS 对应：待办 / 迁移 / 计划 / 优先 / 笔记 / 事件
+  // 注意：提示词故意不教「- [x]」作为新增符号 —— 新完成的事记为笔记/事件；
+  // 只有已有待办才用 note-edit 的「完成：」改回 [x]
+  for (const symbol of ['- [ ] ', '- [>] ', '- [<] ', '- [!] ', '- ', 'o ']) {
     assert.ok(PROTOCOL_PROMPT.includes(symbol), `协议里缺少符号 ${symbol}`);
   }
+  assert.ok(!PROTOCOL_PROMPT.includes('- [x] '), '新增条目里不教 [x]：新完成的事记为笔记/事件');
+  assert.match(PROTOCOL_PROMPT, /不要写成 \[x\]/);
   assert.match(PROTOCOL_PROMPT, /没有值得记录的内容/);
   assert.match(PROTOCOL_PROMPT, /不要重复对话/);
+});
+
+test('协议里教了分层次（嵌套）子弹的写法', () => {
+  // 子项要比父项多缩进，防止父子项都写成第一层
+  assert.match(PROTOCOL_PROMPT, /缩进写出父项与子项/);
+  assert.match(PROTOCOL_PROMPT, /^ {3}- \[ \] 主任务$/m);
+  assert.match(PROTOCOL_PROMPT, /^ {5}- \[ \] 子任务一$/m);
+  assert.match(PROTOCOL_PROMPT, /^ {5}o 下午三点 子事件$/m);
+  assert.match(PROTOCOL_PROMPT, /别把父子项都写成第一层/);
+});
+
+test('完成指令只用于已有待办：新完成的事应该新增为笔记/事件', () => {
+  assert.match(PROTOCOL_PROMPT, /完成：已有条目的原文（只用于笔记里已经存在的待办/);
+  assert.match(PROTOCOL_PROMPT, /新完成的事应该作为笔记\/事件新增/);
 });
 
 test('协议里写明了三段式标签、改动写法与参考笔记的规则', () => {

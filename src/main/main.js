@@ -849,7 +849,16 @@ async function runMarksSmoke(win, fs) {
   const notePath = path.join(os.tmpdir(), `bujo-smoke-marks-${Date.now()}.md`);
   fs.writeFileSync(
     notePath,
-    ['# 自检临时笔记 · 手工操作', '', '- [ ] 先写周报', '- 整理收件箱', '- [ ] 买牛奶', '- [-] 已经划去的老条目', ''].join('\n'),
+    [
+      '# 自检临时笔记 · 手工操作',
+      '',
+      '- [ ] 先写周报',
+      '- 整理收件箱',
+      '- [ ] 买牛奶',
+      '- 回顾设计稿',
+      '- [-] 已经划去的老条目',
+      ''
+    ].join('\n'),
     'utf8'
   );
 
@@ -869,16 +878,19 @@ async function runMarksSmoke(win, fs) {
     const file = {
       // 完成：标记就地变成 [x]
       doneLine: afterLines[2] === '- [x] 先写周报',
-      // 划去：普通笔记也能划，而且原文还在
-      cancelledNote: afterLines[3] === '- [-] 整理收件箱',
-      // 划去再恢复：回到待办
-      restoredLine: afterLines[4] === '- [ ] 买牛奶',
+      // 划去：普通笔记也能划（[-n] 记住「原来是笔记」），原文还在（这一条不恢复，留中间态供核对）
+      cancelledNote: afterLines.includes('- [-n] 回顾设计稿'),
+      // 划去再恢复：待办回到待办
+      restoredLine: afterLines.includes('- [ ] 买牛奶'),
       // 本来就划去的条目没被碰
-      untouched: afterLines[5] === '- [-] 已经划去的老条目',
+      untouched: afterLines.includes('- [-] 已经划去的老条目'),
       // 一行都没少（划去不是删除）
       nothingDeleted: afterLines.length === beforeLines.length,
       headersKept: afterLines[0].startsWith('# 自检临时笔记'),
-      stats: stats.done === 1 && stats.cancelled === 2 && stats.task === 1
+      // 买牛奶恢复回待办；整理收件箱划去后恢复回笔记；回顾设计稿留在划去态 + 原有的一条划去
+      stats: stats.done === 1 && stats.cancelled === 2 && stats.task === 1 && stats.note === 1,
+      // 笔记划去再恢复：应当回到原来的「- 整理收件箱」，而不是变成待办 [ ]
+      noteRestoredToNote: afterLines.includes('- 整理收件箱') && !afterLines.includes('- [-n] 整理收件箱')
     };
 
     return {
