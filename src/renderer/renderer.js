@@ -247,12 +247,17 @@ function renderAll() {
 
 /* ---------------- 左侧日记栏 ---------------- */
 
-/** 文件名 → 列表里的主标题与副标题（星期算法与主进程共用 journal-date.js） */
-function formatJournalLabel(fileName) {
-  const base = fileName.replace(/\.[^.]+$/, '');
-  const day = window.JournalDate && window.JournalDate.parseDateKey(base);
-  if (day) return { name: base, sub: window.JournalDate.weekdayLabel(day) };
-  if (/^\d{4}-\d{2}$/.test(base)) return { name: base, sub: '月度日志' };
+/** 文件名（+角色）→ 列表里的主标题与副标题（星期算法与主进程共用 journal-date.js） */
+function journalLabel(fileName, role) {
+  const base = String(fileName || '').replace(/\.[^.]+$/, '');
+  const lib = window.JournalDate;
+  const day = lib && lib.parseDateKey(base);
+  if (role === 'future') return { name: base, sub: '年度（未来）记录' };
+  if (role === 'monthly') {
+    const month = lib && lib.parseMonthKey(base);
+    return { name: '月度记录', sub: month ? lib.monthLabel(month) : '月度记录' };
+  }
+  if (day) return { name: base, sub: lib.weekdayLabel(day) };
   return { name: base, sub: '笔记' };
 }
 
@@ -280,24 +285,119 @@ function markSelectedJournal(path) {
   journalItems().forEach((li) => li.classList.toggle('selected', samePath(li.dataset.path, path)));
 }
 
+/** 生成一行日记条目；pending 传 ensure 参数（还没建的「未来记录 / 月度记录」） */
+function journalRow({ label, path = '', pending = null, modifiedAt = null }) {
+  const li = document.createElement('li');
+  li.className = 'journal-item' + (pending ? ' pending' : '');
+  if (path) li.dataset.path = path;
+  if (pending) li.dataset.ensure = JSON.stringify(pending);
+  li.tabIndex = 0;
+  li.title = path ? `${path}\n双击打开` : '还不存在，双击按模板新建';
+  const sub = [label.sub, modifiedAt ? shortTime(modifiedAt) : null].filter(Boolean).join(' · ');
+  li.innerHTML =
+    `<span class="journal-name">${escapeHtml(label.name)}</span>` +
+    `<span class="journal-sub">${escapeHtml(sub)}</span>`;
+  return li;
+}
+
 function renderJournalList() {
   els.journalList.innerHTML = '';
   els.sidebarEmpty.hidden = state.journals.length > 0;
+  const lib = window.JournalDate;
 
-  state.journals.forEach((file) => {
-    const label = formatJournalLabel(file.name);
-    const li = document.createElement('li');
-    li.className = 'journal-item';
-    li.dataset.path = file.path;
-    li.tabIndex = 0;
-    li.title = `${file.path}\n双击打开`;
-    li.innerHTML =
-      `<span class="journal-name">${escapeHtml(label.name)}</span>` +
-      `<span class="journal-sub">${escapeHtml(`${label.sub} · ${shortTime(file.modifiedAt)}`)}</span>`;
-    els.journalList.append(li);
-  });
+  const { years, strays } = groupJournals(state.journals);
+
+  [...years.values()]
+    .sort((a, b) => Number(b.year) - Number(a.year))
+    .forEach((yearGroup) => {
+      // 年文件夹标题
+      const head = document.createElement('li');
+      head.className = 'journal-group';
+      head.innerHTML = `<span class="journal-group-name">${escapeHtml(yearGroup.year)}</span><span class="journal-group-hint">年</span>`;
+      els.journalList.append(head);
+
+      // 年度（未来）记录：已有用真实文件，否则给一行「双击新建」
+      if (yearGroup.future) {
+        const file = yearGroup.future;
+        els.journalList.append(journalRow({ label: { name: lib.FUTURE_RECORD_FILE.replace(/\.md$/, '') || '未来记录', sub: `${yearGroup.year} 年 · 年度记录` }, path: file.path, modifiedAt: file.modifiedAt }));
+      } else {
+        els.journalList.append(
+          journalRow({ label: { name: '未来记录', sub: `${yearGroup.year} 年 · 双击新建年度记录` }, pending: { kind: 'future', year: yearGroup.year } })
+        );
+      }
+
+      // 年文件夹下认不出月份的散文件（迁移残留等，罕见）
+      yearGroup.others.forEach((file) => {
+        els.journalList.append(journalRow({ label: journalLabel(file.name, file.role), path: file.path, modifiedAt: file.modifiedAt }));
+      });
+
+      [...yearGroup.months.values()]
+        .sort((a, b) => b.month.localeCompare(a.month))
+        .forEach((monthGroup) => {
+          const monthDate = lib && lib.parseMonthKey(monthGroup.month);
+          const monthHead = document.createElement('li');
+          monthHead.className = 'journal-group month';
+          if (monthDate) monthHead.title = lib.monthLabel(monthDate);
+          monthHead.innerHTML = `<span class="journal-group-name">${escapeHtml(monthDate ? `${monthDate.getMonth() + 1} 月` : monthGroup.month)}</span>`;
+          els.journalList.append(monthHead);
+
+          if (monthGroup.monthly) {
+            const file = monthGroup.monthly;
+            els.journalList.append(journalRow({ label: { name: '月度记录', sub: monthDate ? lib.monthLabel(monthDate) : monthGroup.month }, path: file.path, modifiedAt: file.modifiedAt }));
+          } else {
+            els.journalList.append(
+              journalRow({ label: { name: '月度记录', sub: '双击新建月度记录' }, pending: { kind: 'monthly', month: monthGroup.month } })
+            );
+          }
+
+          // 每日记录：主进程已按日期新→旧排序
+          monthGroup.entries.forEach((file) => {
+            els.journalList.append(journalRow({ label: journalLabel(file.name, file.role), path: file.path, modifiedAt: file.modifiedAt }));
+          });
+        });
+    });
+
+  if (strays.length) {
+    const head = document.createElement('li');
+    head.className = 'journal-group';
+    head.innerHTML = '<span class="journal-group-name">其他</span>';
+    els.journalList.append(head);
+    strays.forEach((file) => {
+      els.journalList.append(journalRow({ label: journalLabel(file.name, file.role), path: file.path, modifiedAt: file.modifiedAt }));
+    });
+  }
 
   markActiveJournal();
+
+  /** 把文件列表归成「年 → 月」两层组；认不出年份的归入末尾散件组 */
+  function groupJournals(files) {
+    const years = new Map();
+    const strays = [];
+
+    files.forEach((file) => {
+      if (!file.year) {
+        strays.push(file);
+        return;
+      }
+      const key = String(file.year);
+      const yearGroup = years.get(key) || { year: key, future: null, months: new Map(), others: [] };
+      years.set(key, yearGroup);
+
+      if (file.role === 'future') {
+        yearGroup.future = yearGroup.future || file;
+      } else if (file.month) {
+        const monthKey = String(file.month);
+        const month = yearGroup.months.get(monthKey) || { month: monthKey, monthly: null, entries: [] };
+        yearGroup.months.set(monthKey, month);
+        if (file.role === 'monthly') month.monthly = month.monthly || file;
+        else month.entries.push(file);
+      } else {
+        yearGroup.others.push(file);
+      }
+    });
+
+    return { years, strays };
+  }
 }
 
 async function refreshJournals() {
@@ -479,6 +579,33 @@ els.viewSource.addEventListener('click', () => setView('source'));
 els.sidebarToggle.addEventListener('click', () => setSidebarCollapsed(!els.sidebar.classList.contains('collapsed')));
 els.sidebarRefresh.addEventListener('click', refreshJournals);
 
+/**
+ * 双击/回车打开一篇日记。还没建的「未来记录 / 月度记录」行（data-ensure）
+ * 先按模板创建，再刷新列表并载入新建的文件。
+ */
+async function openJournalRow(li) {
+  if (!li) return;
+  const ensureSpec = li.dataset.ensure;
+  if (ensureSpec) {
+    let spec;
+    try {
+      spec = JSON.parse(ensureSpec);
+    } catch {
+      return;
+    }
+    const result = await window.bujo.ensureJournal(spec);
+    if (!result || !result.ok) {
+      showError(`创建日记失败：${(result && result.error) || '未知错误'}`);
+      return;
+    }
+    clearError();
+    await refreshJournals();
+    await loadFile(result.path);
+    return;
+  }
+  await loadFile(li.dataset.path);
+}
+
 // 日记列表：单击选中，双击打开（回车同样可以打开）
 els.journalList.addEventListener('click', (event) => {
   const item = event.target.closest('.journal-item');
@@ -488,12 +615,12 @@ els.journalList.addEventListener('dblclick', async (event) => {
   const item = event.target.closest('.journal-item');
   if (!item) return;
   markSelectedJournal(item.dataset.path);
-  await loadFile(item.dataset.path);
+  await openJournalRow(item);
 });
 els.journalList.addEventListener('keydown', async (event) => {
   if (event.key !== 'Enter') return;
   const item = event.target.closest('.journal-item');
-  if (item) await loadFile(item.dataset.path);
+  if (item) await openJournalRow(item);
 });
 
 document.addEventListener('keydown', (event) => {
@@ -577,10 +704,31 @@ window.__bujoSmokeTest = async (filePath) => {
   const result = await loadFile(filePath);
   if (!result.ok) return { ok: false, error: result.error };
   const before = snapshot();
-  const sidebarItems = journalItems();
+  // 页面初始化时的第一次日记扫描可能早于自检预置文件；这里按磁盘最新状态再扫一次
+  await refreshJournals();
+  let sidebarItems = journalItems();
 
-  // 双击侧边栏第一条：应该换成那一篇日记的内容
-  const first = sidebarItems[0];
+  // 新结构下侧栏最前面常有「年度 / 月度记录还没建」的 pending 行：
+  // 双击第一条 pending 行 → 应按模板自动建出来并载入，刷新后变成真实行且高亮。
+  let ensuredPending = null;
+  const firstPending = [...els.journalList.querySelectorAll('.journal-item.pending')][0];
+  if (firstPending) {
+    firstPending.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }));
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    const ensuredPath = state.file && state.file.path;
+    await refreshJournals();
+    const nowReal = [...journalItems()].find((li) => samePath(li.dataset.path, ensuredPath));
+    ensuredPending = {
+      opened: Boolean(state.file),
+      fileName: state.file && state.file.name,
+      listedAfterRefresh: Boolean(nowReal),
+      highlighted: Boolean(nowReal && nowReal.classList.contains('active'))
+    };
+    sidebarItems = journalItems();
+  }
+
+  // 双击侧边栏第一篇真实日记：应该换成那一篇日记的内容
+  const first = journalItems().find((li) => li.dataset.path);
   const firstPath = first && first.dataset.path;
   const initialWasFirstItem = samePath(firstPath, result.file.path);
   let afterSidebarOpen = null;
@@ -607,6 +755,7 @@ window.__bujoSmokeTest = async (filePath) => {
   // 双击打开的那一篇真的渲染出来了：至少有一个块，条目数与统计一致。
   // 不能要求「一定有子弹条目」：今天刚建的日记是个空模板，那样断言会看环境翻脸。
   const rendered = Boolean(afterSidebarOpen) && afterSidebarOpen.blocks > 0 && afterSidebarOpen.entries === afterSidebarOpen.stats.total;
+  const ensureOk = !ensuredPending || (ensuredPending.opened && ensuredPending.listedAfterRefresh && ensuredPending.highlighted);
 
   return {
     ok:
@@ -615,6 +764,7 @@ window.__bujoSmokeTest = async (filePath) => {
       sidebarItems.length > 0 &&
       switched &&
       rendered &&
+      ensureOk &&
       samePath(activePath, firstPath) &&
       collapsedWidth < expandedWidth &&
       listHidden &&
@@ -628,7 +778,8 @@ window.__bujoSmokeTest = async (filePath) => {
       openedByDoubleClick: afterSidebarOpen && afterSidebarOpen.file,
       switched,
       rendered,
-      activeHighlighted: Boolean(activePath)
+      activeHighlighted: Boolean(activePath),
+      ensuredPending
     },
     afterSidebarOpen,
     collapse: { collapsedWidth, expandedWidth, listHidden, refreshHiddenWhenCollapsed, refreshVisibleWhenExpanded }

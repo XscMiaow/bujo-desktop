@@ -576,6 +576,41 @@ body.is-floating-collapsed #empty-state {
   font-size: 11px;
 }
 
+/* 年 / 月分组标题：纯标签，不可点 */
+.journal-group {
+  display: flex;
+  align-items: baseline;
+  gap: 5px;
+  padding: 12px 9px 4px;
+  color: var(--text-dim);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  user-select: none;
+}
+
+.journal-group.month {
+  padding: 9px 9px 3px;
+  padding-left: 20px;
+  font-weight: 600;
+}
+
+.journal-group .journal-group-hint {
+  font-weight: 400;
+  opacity: 0.7;
+}
+
+/* 还没建的「未来记录 / 月度记录」行：提示可以双击新建 */
+.journal-item.pending .journal-name::before {
+  content: '＋ ';
+  color: var(--accent);
+}
+
+.journal-item.pending .journal-sub {
+  color: var(--text-dim);
+  opacity: 0.85;
+}
+
 .sidebar-empty {
   padding: 10px 12px;
   color: var(--text-dim);

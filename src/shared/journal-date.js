@@ -49,5 +49,75 @@
     return Number.isNaN(date.getTime()) ? null : date;
   }
 
-  return { dateKey, dailyFileName, weekdayLabel, dateLabel, timeLabel, parseDateKey, WEEKDAYS };
+  /* ---------------- 年 / 月 文件夹（嵌套的日记目录结构） ---------------- */
+
+  /** 2026 */
+  function yearKey(date) {
+    return String(date.getFullYear());
+  }
+
+  /** 2026-10 */
+  function monthKey(date) {
+    return `${date.getFullYear()}-${pad(date.getMonth() + 1)}`;
+  }
+
+  /** 年文件夹名：2026 */
+  function yearFolderName(date) {
+    return yearKey(date);
+  }
+
+  /** 月文件夹名：2026-10 */
+  function monthFolderName(date) {
+    return monthKey(date);
+  }
+
+  /** 年度（未来）记录固定文件名；一年一篇，放在年文件夹里 */
+  const FUTURE_RECORD_FILE = '未来记录.md';
+  /** 月度记录固定文件名；一月一篇，放在月文件夹里 */
+  const MONTHLY_RECORD_FILE = '月度记录.md';
+
+  /** 解析 '2026-10' 为这个月 1 号的本地时间 Date，不合法时返回 null */
+  function parseMonthKey(text) {
+    const match = /^(\d{4})-(\d{2})$/.exec(String(text || ''));
+    if (!match) return null;
+    const month = Number(match[2]);
+    if (month < 1 || month > 12) return null;
+    return new Date(Number(match[1]), month - 1, 1);
+  }
+
+  /** 解析 '2026' 为这年 1 月 1 日的本地时间 Date，不合法时返回 null */
+  function parseYearKey(text) {
+    if (!/^\d{4}$/.test(String(text || ''))) return null;
+    return new Date(Number(text), 0, 1);
+  }
+
+  /** 2026 年 10 月 */
+  function monthLabel(date) {
+    return `${date.getFullYear()} 年 ${date.getMonth() + 1} 月`;
+  }
+
+  /** 2026 年 */
+  function yearLabel(date) {
+    return `${date.getFullYear()} 年`;
+  }
+
+  return {
+    dateKey,
+    dailyFileName,
+    weekdayLabel,
+    dateLabel,
+    timeLabel,
+    parseDateKey,
+    yearKey,
+    monthKey,
+    yearFolderName,
+    monthFolderName,
+    FUTURE_RECORD_FILE,
+    MONTHLY_RECORD_FILE,
+    parseMonthKey,
+    parseYearKey,
+    monthLabel,
+    yearLabel,
+    WEEKDAYS
+  };
 });

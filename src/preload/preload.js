@@ -41,6 +41,12 @@ contextBridge.exposeInMainWorld('bujo', {
   /** 日记目录里的文件列表，最新在前：{ ok, dir, files } */
   listJournals: () => ipcRenderer.invoke('journal:list'),
 
+  /**
+   * 确保某类年度/月度记录存在（不存在才按模板建），返回与 getTodayJournal 同构的 { ok, path, name, created, content }。
+   * kind: 'daily'（今天的每日记录）/ 'monthly'（可选 month: '2026-10'，缺省当前月）/ 'future'（可选 year: '2026'，缺省当前年）
+   */
+  ensureJournal: (options) => ipcRenderer.invoke('journal:ensure', options),
+
   /** 拖拽进来的 File 对象 → 真实磁盘路径（Electron 32+ 只暴露在 preload 里） */
   getPathForFile: (file) => {
     try {

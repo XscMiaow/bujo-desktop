@@ -6,8 +6,30 @@ const fs = require('node:fs/promises');
 const os = require('node:os');
 const path = require('node:path');
 
-const { listJournals, dateKeyOf, ensureDailyJournal, dailyTemplate } = require('../src/main/journal-service.js');
-const { dailyFileName, dateLabel, parseDateKey } = require('../src/shared/journal-date.js');
+const {
+  listJournals,
+  dateKeyOf,
+  locationFrom,
+  roleOf,
+  dailyTemplate,
+  monthlyTemplate,
+  futureTemplate,
+  ensureDailyJournal,
+  ensureMonthlyJournal,
+  ensureFutureLog,
+  dailyJournalPath,
+  migrateFlatJournals,
+  STRUCTURE_MARKER
+} = require('../src/main/journal-service.js');
+const {
+  dailyFileName,
+  dateLabel,
+  parseDateKey,
+  parseMonthKey,
+  parseYearKey,
+  monthLabel,
+  yearLabel
+} = require('../src/shared/journal-date.js');
 
 let tmpDir;
 
@@ -26,42 +48,81 @@ test.after(async () => {
 test('从文件名推断日期键', () => {
   assert.equal(dateKeyOf('2026-10-07.md'), '2026-10-07');
   assert.equal(dateKeyOf('2026-10.md'), '2026-10');
-  assert.equal(dateKeyOf('future-log.md'), null);
+  assert.equal(dateKeyOf('未来记录.md'), null);
   assert.equal(dateKeyOf('README.md'), null);
 });
 
-test('列出 .md 文件，最新的排在最前面', async () => {
-  await write('2026-10-05.md');
-  await write('2026-10-07.md');
-  await write('2026-10.md');
-  await write('future-log.md');
+test('从文件夹与文件名推断归属（年 / 月）与角色', () => {
+  assert.deepEqual(locationFrom('2026/2026-10', '2026-10-07.md'), { year: '2026', month: '2026-10' });
+  assert.deepEqual(locationFrom('2026', '未来记录.md'), { year: '2026', month: null });
+  // 旧平铺文件也可从文件名兜底
+  assert.deepEqual(locationFrom('', '2026-10-07.md'), { year: '2026', month: '2026-10' });
+  assert.deepEqual(locationFrom('', '随手记.md'), { year: null, month: null });
 
-  const { dir, files } = await listJournals(tmpDir);
-  const names = files.map((f) => f.name);
+  assert.equal(roleOf('2026-10-07.md'), 'daily');
+  assert.equal(roleOf('2026-10.md'), 'monthly');
+  assert.equal(roleOf('月度记录.md'), 'monthly');
+  assert.equal(roleOf('未来记录.md'), 'future');
+  assert.equal(roleOf('future-log.md'), 'future');
+  assert.equal(roleOf('随手记.md'), 'other');
+});
 
-  assert.equal(dir, path.resolve(tmpDir));
-  assert.equal(names[0], '2026-10-07.md', '最新的日期在最前');
-  assert.equal(names[1], '2026-10-05.md');
-  assert.equal(names[2], '2026-10.md');
-  assert.equal(names.at(-1), 'future-log.md', '认不出日期的排在最后');
+test('递归列出 .md 文件，年→月→角色→日期排序（新的在前）', async () => {
+  await fs.mkdir(path.join(tmpDir, 'flat'), { recursive: true });
+  const dir = path.join(tmpDir, 'flat');
+  const mk = async (rel, name, content) => {
+    await fs.mkdir(path.join(dir, rel), { recursive: true });
+    await fs.writeFile(path.join(dir, rel, name), content || '# 日记\n', 'utf8');
+  };
+
+  await mk('', '2026-10-05.md');
+  await mk('', '2026-10-07.md');
+  await mk('', 'future-log.md');
+  await mk('2026', '未来记录.md');
+  await mk('2026/2026-10', '月度记录.md');
+  await mk('2026/2026-10', '2026-10-07.md');
+  await mk('2026/2026-09', '2026-09-01.md');
+  await mk('2050', '未来记录.md');
+
+  const { dir: resolved, files } = await listJournals(dir);
+  const labels = files.map((f) => `${f.folder || '(root)'}┆${f.name}`);
+
+  assert.equal(resolved, path.resolve(dir));
+  // 同一个月的文件聚在一起（根级平铺残留也从文件名推出了月份）；未来记录排在当年月份前
+  assert.deepEqual(labels, [
+    '2050┆未来记录.md',
+    '2026┆未来记录.md',
+    '2026/2026-10┆月度记录.md',
+    '2026/2026-10┆2026-10-07.md',
+    '(root)┆2026-10-07.md',
+    '(root)┆2026-10-05.md',
+    '2026/2026-09┆2026-09-01.md',
+    '(root)┆future-log.md'
+  ]);
 
   const first = files[0];
-  assert.equal(path.dirname(first.path), path.resolve(tmpDir));
   assert.ok(first.size > 0);
   assert.ok(!Number.isNaN(Date.parse(first.modifiedAt)));
 });
 
-test('忽略非 Markdown 文件与子目录', async () => {
-  await write('notes.txt', '纯文本');
-  await write('archive.markdown');
-  await fs.mkdir(path.join(tmpDir, 'nested'), { recursive: true });
-  await fs.writeFile(path.join(tmpDir, 'nested', '2026-01-01.md'), '# 深层文件', 'utf8');
+test('忽略非 Markdown 文件、README 与隐藏文件；嵌套子目录同样过滤', async () => {
+  await fs.mkdir(path.join(tmpDir, 'weird'), { recursive: true });
+  const dir = path.join(tmpDir, 'weird');
+  await fs.writeFile(path.join(dir, 'notes.txt'), '纯文本', 'utf8');
+  await fs.writeFile(path.join(dir, 'archive.markdown'), '# ok\n', 'utf8');
+  await fs.writeFile(path.join(dir, 'README.md'), '# 说明\n', 'utf8');
+  await fs.writeFile(path.join(dir, '.journal-structure-v2'), '{}\n', 'utf8');
+  await fs.mkdir(path.join(dir, 'nested', 'deeper'), { recursive: true });
+  await fs.writeFile(path.join(dir, 'nested', 'deeper', '2026-01-01.md'), '# 深层\n', 'utf8');
 
-  const { files } = await listJournals(tmpDir);
+  const { files } = await listJournals(dir);
   const names = files.map((f) => f.name);
-  assert.ok(!names.includes('notes.txt'), '.txt 不进日记栏');
   assert.ok(names.includes('archive.markdown'), '.markdown 也算日记');
-  assert.ok(!names.includes('2026-01-01.md'), '子目录里的文件不列出');
+  assert.ok(names.includes('2026-01-01.md'), '嵌套子目录里的日记也列出（新结构就在子目录里）');
+  assert.ok(!names.includes('notes.txt'), '.txt 不进日记栏');
+  assert.ok(!names.includes('README.md'), 'README 是说明文档，不混进日记列表');
+  assert.ok(!files.some((f) => f.name.startsWith('.')), '隐藏 marker 文件不进日记栏');
+  assert.equal(files.find((f) => f.name === '2026-01-01.md').folder, 'nested/deeper');
 });
 
 test('目录不存在时返回空列表而不是报错', async () => {
@@ -71,36 +132,114 @@ test('目录不存在时返回空列表而不是报错', async () => {
   assert.deepEqual(files, []);
 });
 
-test('ensureDailyJournal 按模板新建今天的日志，再调用不会重复写', async () => {
-  const dir = path.join(tmpDir, 'daily');
-  const date = new Date(2026, 9, 7, 8, 0);
+const DAY = new Date(2026, 9, 7, 8, 0);
 
-  const first = await ensureDailyJournal(dir, date);
+test('ensureDailyJournal 建在 年/月 文件夹里，再调用不会重复写', async () => {
+  const dir = path.join(tmpDir, 'daily');
+
+  const first = await ensureDailyJournal(dir, DAY);
   assert.equal(first.created, true);
   assert.equal(first.name, '2026-10-07.md');
-  assert.equal(dailyFileName(date), '2026-10-07.md');
+  assert.equal(dailyFileName(DAY), '2026-10-07.md');
+  assert.equal(first.path, dailyJournalPath(dir, DAY));
+
+  const rel = path.relative(dir, first.path);
+  assert.equal(rel.replaceAll('\\', '/'), '2026/2026-10/2026-10-07.md', '每日记录应在 年/月 文件夹下');
 
   const content = await fs.readFile(first.path, 'utf8');
   assert.equal(content, '# 2026-10-07 星期三\n\n## 任务\n\n## 笔记\n');
-  assert.equal(content, dailyTemplate(date));
+  assert.equal(content, dailyTemplate(DAY));
 
   await fs.writeFile(first.path, '- [ ] 我写了一点东西\n', 'utf8');
-  const second = await ensureDailyJournal(dir, date);
+  const second = await ensureDailyJournal(dir, DAY);
   assert.equal(second.created, false);
   assert.equal(await fs.readFile(first.path, 'utf8'), '- [ ] 我写了一点东西\n', '已存在时不会覆盖');
 });
 
-test('日期标签按本地时间算星期', () => {
+test('ensureMonthlyJournal / ensureFutureLog 按各自文件夹与模板建', async () => {
+  const dir = path.join(tmpDir, 'periodic');
+
+  const monthly = await ensureMonthlyJournal(dir, DAY);
+  assert.equal(path.relative(dir, monthly.path).replaceAll('\\', '/'), '2026/2026-10/月度记录.md');
+  assert.equal(await fs.readFile(monthly.path, 'utf8'), monthlyTemplate(DAY));
+  assert.equal(monthlyTemplate(DAY), '# 2026 年 10 月 · 月度记录\n\n## 任务\n\n## 笔记\n');
+
+  const future = await ensureFutureLog(dir, DAY);
+  assert.equal(path.relative(dir, future.path).replaceAll('\\', '/'), '2026/未来记录.md');
+  assert.equal(await fs.readFile(future.path, 'utf8'), futureTemplate(DAY));
+  assert.equal(futureTemplate(DAY), '# 2026 年 · 未来记录\n\n## 任务\n\n## 笔记\n');
+
+  // 再调用不覆盖
+  assert.equal((await ensureMonthlyJournal(dir, DAY)).created, false);
+  assert.equal((await ensureFutureLog(dir, DAY)).created, false);
+});
+
+test('一次性迁移：平铺的日期日记与月记移进 年/月 文件夹，只跑一次', async () => {
+  const dir = path.join(tmpDir, 'migrate');
+  await fs.mkdir(dir, { recursive: true });
+  await fs.writeFile(path.join(dir, '2026-10-07.md'), '# 旧日记\n', 'utf8');
+  await fs.writeFile(path.join(dir, '2026-10-12.md'), '# 旧日记2\n', 'utf8');
+  await fs.writeFile(path.join(dir, '2026-09.md'), '# 旧月记\n', 'utf8');
+  await fs.writeFile(path.join(dir, 'future-log.md'), '# 散件\n', 'utf8');
+
+  const report = await migrateFlatJournals(dir);
+  assert.equal(report.needed, true);
+  assert.deepEqual(report.moved.map((m) => m.from).sort(), ['2026-09.md', '2026-10-07.md', '2026-10-12.md']);
+  assert.equal(
+    await fs.readFile(path.join(dir, '2026', '2026-10', '2026-10-07.md'), 'utf8'),
+    '# 旧日记\n'
+  );
+  assert.equal(
+    await fs.readFile(path.join(dir, '2026', '2026-09', '月度记录.md'), 'utf8'),
+    '# 旧月记\n',
+    '旧平铺月记应改名为月度记录.md 放进对应月文件夹'
+  );
+  assert.ok(await fs.access(path.join(dir, 'future-log.md')).then(() => true, () => false), '非日期命名的散件原地不动');
+  assert.ok(await fs.access(path.join(dir, STRUCTURE_MARKER)).then(() => true, () => false), '迁移完成要留标记');
+
+  // 第二次调用直接跳过，不再报告移动
+  const again = await migrateFlatJournals(dir);
+  assert.equal(again.needed, false);
+  assert.deepEqual(again.moved, []);
+
+  // 目标已存在时不覆盖不移动
+  const dir2 = path.join(tmpDir, 'migrate-conflict');
+  await fs.mkdir(path.join(dir2, '2026', '2026-10'), { recursive: true });
+  await fs.writeFile(path.join(dir2, '2026-10-07.md'), '# 新的\n', 'utf8');
+  await fs.writeFile(path.join(dir2, '2026', '2026-10', '2026-10-07.md'), '# 已存在\n', 'utf8');
+  const conflict = await migrateFlatJournals(dir2);
+  assert.deepEqual(conflict.moved, []);
+  assert.equal(conflict.skipped.length, 1);
+  assert.equal(
+    await fs.readFile(path.join(dir2, '2026', '2026-10', '2026-10-07.md'), 'utf8'),
+    '# 已存在\n'
+  );
+});
+
+test('日期与年月标签按本地时间算', () => {
   assert.equal(dateLabel(new Date(2026, 9, 7)), '2026-10-07 星期三');
   assert.equal(dateLabel(new Date(2026, 9, 11)), '2026-10-11 星期日');
   assert.equal(parseDateKey('2026-10-07').getDay(), 3, '不能被当成 UTC 解析成星期二');
   assert.equal(parseDateKey('2026-10'), null);
+
+  assert.equal(parseMonthKey('2026-10').getMonth(), 9);
+  assert.equal(parseMonthKey('2026-13'), null);
+  assert.equal(parseMonthKey('随便'), null);
+  assert.equal(parseYearKey('2026').getFullYear(), 2026);
+  assert.equal(parseYearKey('202x'), null);
+  assert.equal(monthLabel(new Date(2026, 9, 13)), '2026 年 10 月');
+  assert.equal(yearLabel(new Date(2026, 9, 13)), '2026 年');
 });
 
-test('真实 journals 目录里有今天这份日记', async () => {
+test('真实 journals 目录已是 年/月 嵌套结构', async () => {
   const repoJournals = path.join(__dirname, '..', 'journals');
   const { files } = await listJournals(repoJournals);
-  const names = files.map((f) => f.name);
-  assert.ok(names.includes('2026-10-07.md'), `journals/ 里应该有示例日记，实际：${names.join(', ')}`);
-  assert.ok(!names.includes('README.md'), 'README 是说明文档，不该混进日记列表');
+  assert.ok(
+    files.some((f) => f.folder.replace(/\\/g, '/') === '2026/2026-10' && f.role === 'daily'),
+    `journals/ 迁移后应有 2026/2026-10/2026-10-XX.md 日记，实际：${files.map((f) => f.folder + '/' + f.name).join(', ')}`
+  );
+  assert.ok(files.some((f) => f.role === 'monthly'), '月度记录应已建出');
+  assert.ok(files.some((f) => f.role === 'future'), '未来记录应已建出');
+  assert.ok(!files.some((f) => f.folder === ''), '旧平铺日记应已迁走');
+  assert.ok(!files.some((f) => f.name.toLowerCase() === 'readme.md'), 'README 是说明文档，不该混进日记列表');
 });

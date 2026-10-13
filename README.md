@@ -14,10 +14,10 @@ npm test           # 单元测试（解析器 + 文件读取 + 日记目录扫�
 
 # 端到端自检：preload → IPC → 解析 → 渲染 → 日记栏双击切换 → 折叠，并输出截图
 npm run smoke
-npm run smoke -- journals/2026-10-07.md   # 也可以指定自检打开的文件
+npm run smoke -- journals/2026/2026-10/2026-10-07.md   # 也可以指定自检打开的文件
 ```
 
-也可以直接把 `.md` 文件拖进窗口，或用 `npm start -- journals/2026-10-07.md` 启动时直接打开。
+也可以直接把 `.md` 文件拖进窗口，或用 `npm start -- journals/2026/2026-10/2026-10-07.md` 启动时直接打开。
 
 ## AI 聊天（与笔记打通）
 
@@ -44,7 +44,7 @@ npm run smoke -- journals/2026-10-07.md   # 也可以指定自检打开的文件
   代码块和标题原样保留；有新增条目时前面加一行 `**AI 记录 · 14:32**`（只有改动时不加时间戳），
   卡片上的「带提问」勾选后还会附上你的问题。写入结果会写明新增/并入/改动/跳过重复各几条。
 - 按「记入」选择的目标，写进**当前打开的笔记**或**今天的日记**
-  （今天的日志不存在时会按模板新建 `journals/YYYY-MM-DD.md`）。
+  （今天的日志不存在时会按模板新建 `journals/2026/2026-10/2026-10-13.md` 这样的 年/月 路径）。
 - 两段都为空时（AI 认为这轮没什么值得记的）不会写；模型完全不按协议回答时，
   卡片会说明白，并给一个「写入全文要点」的兜底按钮，不会默默把整段对话当笔记写进去。
 - AI 回复前先显示等待态：气泡「正在思考…」+ 草稿卡「等待 AI 回复…」，
@@ -58,13 +58,13 @@ npm run smoke -- journals/2026-10-07.md   # 也可以指定自检打开的文件
 其他 agent / 脚本不需要打开窗口，可以通过 CLI 操作笔记文档，与应用共用同一套写入规则（子弹语法、去重、单行改标记）和同一套「有界串行写入队列」：
 
 ```bash
-npm run cli -- read   journals/2026-10-10.md            # 输出笔记原文
-npm run cli -- read   journals/2026-10-10.md --json     # 机器可读：{ ok, path, name, content }
-npm run cli -- append journals/2026-10-10.md "- [ ] 新的待办"          # 追加一条条目
+npm run cli -- read   journals/2026/2026-10/2026-10-10.md            # 输出笔记原文
+npm run cli -- read   journals/2026/2026-10/2026-10-10.md --json     # 机器可读：{ ok, path, name, content }
+npm run cli -- append journals/2026/2026-10/2026-10-10.md "- [ ] 新的待办"          # 追加一条条目
 npm run cli -- append 新文件.md "- 第一条" --create --initial "# 新日记"  # 新建文件
-npm run cli -- mark   journals/2026-10-10.md "写周报" --mark done      # 标记完成
-npm run cli -- mark   journals/2026-10-10.md "不想做了" --mark cancelled  # 划去（原文保留，不真删）
-npm run cli -- mark   journals/2026-10-10.md "写周报" --mark task      # 恢复为待办
+npm run cli -- mark   journals/2026/2026-10/2026-10-10.md "写周报" --mark done      # 标记完成
+npm run cli -- mark   journals/2026/2026-10/2026-10-10.md "不想做了" --mark cancelled  # 划去（原文保留，不真删）
+npm run cli -- mark   journals/2026/2026-10/2026-10-10.md "写周报" --mark task      # 恢复为待办
 ```
 
 - `mark` 默认 `--mark done`；`--mark` 可取 `task`（`- [ ]`）/ `done`（`- [x]`）/ `cancelled`（`- [-]`）。
@@ -115,7 +115,10 @@ npm run cli -- mark   journals/2026-10-10.md "写周报" --mark task      # 恢�
 
 ## 主窗口能做什么
 
-- **左侧日记栏**：列出日记目录（默认 `journals/`）里所有 Markdown 文件，最新在前；**单击选中、双击打开**，回车也能打开；当前打开的一篇会高亮。
+- **左侧日记栏**：按 `年 → 月` 分组织出日记目录（默认 `journals/`）里的所有 Markdown 文件；
+  每个年份组固定带一行「未来记录」（年度记录），每个月组固定带一行「月度记录」+ 该月的每日记录，新的在前；
+  **单击选中、双击打开**，回车也能打开；当前打开的一篇会高亮；
+  年度/月度记录还没建时是一行「＋ 双击新建」，双击就会按模板建出来并打开（不存在才建，绝不覆盖）。
 - **可收起**：点标题栏的 `‹` / `›` 把日记栏收成一条 42px 的窄条，收起后只留「展开」按钮（列表、目录路径、刷新按钮都隐藏），状态会记住。
 - **打开笔记**：顶部按钮、`Ctrl/Cmd + O`、拖拽 `.md` 到窗口，或通过启动参数传入路径。
 - **预览 / 原文切换**：预览用 Markdown 渲染，子弹条目按类型着色；原文显示文件原始内容。
@@ -176,9 +179,27 @@ src/
     journal-date.js   日期/星期/时间标签（主进程与渲染层共用）
 samples/
   Bullet-Journal.md   示例笔记（用于演示各种子弹符号）
-journals/             日记目录：一天一个 .md 文件，命名约定见 journals/README.md
+journals/             日记目录：年/月 嵌套结构（见下），命名约定见 journals/README.md
 test/                  node:test 单元测试
 ```
+
+### 日记目录结构（年 → 月 → 每日）
+
+```text
+journals/
+  .journal-structure-v2        旧结构一次性迁移的标记（迁移只跑一次）
+  2026/                        年文件夹
+    未来记录.md                 年度（未来）记录，一年一篇
+    2026-10/                   月文件夹
+      月度记录.md               月度记录，一月一篇
+      2026-10-13.md            每日记录，一天一篇
+```
+
+- 启动时会一次性把旧版平铺结构（`journals/2026-10-07.md`、`journals/2026-10.md`）
+  自动迁进对应 年/月 文件夹（平铺月记改名 `月度记录.md`），迁移完留标记不再重复；
+  目标已存在时不动原来的文件。
+- 「未来记录」「月度记录」在侧边栏点开对应节点时才会按模板创建；
+  每日记录在记入日记时自动建。
 
 日记目录可用环境变量 `BUJO_JOURNALS` 指定（默认是项目根下的 `journals/`）：
 

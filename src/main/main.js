@@ -5,13 +5,20 @@ const path = require('node:path');
 const http = require('node:http');
 const os = require('node:os');
 const { readMarkdownFile, MARKDOWN_EXTENSIONS } = require('./file-service');
-const { listJournals, ensureDailyJournal } = require('./journal-service');
+const {
+  listJournals,
+  ensureDailyJournal,
+  ensureMonthlyJournal,
+  ensureFutureLog,
+  dailyJournalPath,
+  migrateFlatJournals
+} = require('./journal-service');
 const { appendToNote, readNote, integrateNoteFile, setBulletMark, isInsideDirectory } = require('./note-service');
 const { SettingsService, DEFAULT_SETTINGS, LEGACY_SYSTEM_PROMPTS } = require('./settings-service');
 const { streamChat } = require('./chat-service');
 const { buildSystemPrompt } = require('../shared/ai-reply.js');
 const { buildNoteContext } = require('../shared/note-context.js');
-const { dailyFileName } = require('../shared/journal-date.js');
+const { parseMonthKey, parseYearKey } = require('../shared/journal-date.js');
 
 const isSmokeTest = process.argv.includes('--smoke-test');
 let mainWindow = null;
@@ -19,9 +26,15 @@ let mainWindow = null;
 /** 自检截图输出目录 */
 const screenshotsDir = path.join(__dirname, '..', '..', 'screenshots');
 
-/** 日记目录：默认项目根下的 journals/，可用环境变量 BUJO_JOURNALS 指定 */
+/**
+ * 日记目录：默认项目根下的 journals/，可用环境变量 BUJO_JOURNALS 指定。
+ * 自检模式用临时目录：避免「双击侧边栏新建年度/月度记录」这类自检动作
+ * 把示例文件夹里的文件给动出来。
+ */
 function journalsDir() {
-  return process.env.BUJO_JOURNALS || path.join(app.getAppPath(), 'journals');
+  if (process.env.BUJO_JOURNALS) return process.env.BUJO_JOURNALS;
+  if (isSmokeTest) return path.join(os.tmpdir(), `bujo-smoke-journals-${process.pid}`);
+  return path.join(app.getAppPath(), 'journals');
 }
 
 /** 设置存储在用户目录，不进项目；密钥交给系统钥匙串加密 */
@@ -67,7 +80,7 @@ const NOTE_CONTEXT_MAX = 2400;
 function resolveContextNote(spec) {
   if (!spec || typeof spec !== 'object') return null;
   if (spec.target === 'daily') {
-    const filePath = path.join(journalsDir(), dailyFileName(new Date()));
+    const filePath = dailyJournalPath(journalsDir(), new Date());
     return { path: filePath, name: path.basename(filePath) };
   }
   if (typeof spec.filePath !== 'string' || !spec.filePath.trim()) return null;
@@ -322,6 +335,31 @@ function registerIpcHandlers() {
     }
   });
 
+  // 点开某个年/月节点时确保对应的年度（未来）/月度记录存在（不存在才按模板建）
+  ipcMain.handle('journal:ensure', async (_event, payload = {}) => {
+    try {
+      const dir = journalsDir();
+      let journal;
+      if (payload.kind === 'daily') {
+        journal = await ensureDailyJournal(dir);
+      } else if (payload.kind === 'monthly') {
+        // month 是 '2026-10'；不传或不是合法月份时按当前月
+        const date = parseMonthKey(payload.month) || new Date();
+        journal = await ensureMonthlyJournal(dir, date);
+      } else if (payload.kind === 'future') {
+        // year 是 '2026'；不傳时用当前年
+        const date = parseYearKey(payload.year) || new Date();
+        journal = await ensureFutureLog(dir, date);
+      } else {
+        throw new Error(`未知的日记类型：${String(payload.kind)}`);
+      }
+      rememberWritable(journal.path);
+      return { ok: true, ...journal, exists: true, content: await readNote(journal.path) };
+    } catch (err) {
+      return { ok: false, error: err.message };
+    }
+  });
+
   // ---------------- 设置（API Key 只在主进程，不进渲染层） ----------------
 
   ipcMain.handle('settings:get', () => getSettings().getPublic());
@@ -385,7 +423,7 @@ function registerIpcHandlers() {
   ipcMain.handle('note:today', async (_event, options = {}) => {
     try {
       const dir = journalsDir();
-      const filePath = path.join(dir, dailyFileName(new Date()));
+      const filePath = dailyJournalPath(dir, new Date());
 
       // 只想看看今天写了什么（预览用）时不要顺手把文件建出来
       if (options && options.create === false) {
@@ -711,6 +749,11 @@ async function runSmokeTest(win) {
   const shot = path.join(screenshotsDir, 'main-window.png');
   const script = `window.__bujoSmokeTest(${JSON.stringify(sample)})`;
   try {
+    // 自检用临时日记目录：预置一篇今天的每日记录，侧边栏才有 年/月 分组可展示
+    const todayPath = dailyJournalPath(journalsDir(), new Date());
+    fs.mkdirSync(path.dirname(todayPath), { recursive: true });
+    fs.writeFileSync(todayPath, `# ${new Date().toISOString().slice(0, 10)}（自检）\n\n- [ ] 自检侧边栏示例\n`, 'utf8');
+
     // 打开文件前的画面，用来证明截图确实是新的，而不是上一帧
     const beforeFrame = await captureFrame(win);
 
@@ -1025,12 +1068,12 @@ async function runChatSmokeTest(win) {
     report.ok = report.ok && Object.values(report.contextSent).every(Boolean);
 
     // 「参考 / 记入今天的日记」这条路径：只读查询不能顺手把今天的日记建出来
-    const dailyFile = path.join(journalsDir(), dailyFileName(new Date()));
+    const dailyFile = dailyJournalPath(journalsDir(), new Date());
     const existedBefore = fs.existsSync(dailyFile);
     const daily = await win.webContents.executeJavaScript('window.bujo.getTodayJournal({ create: false })');
     report.dailyLookup = {
       ok: Boolean(daily && daily.ok),
-      hasName: Boolean(daily && daily.name === dailyFileName(new Date())),
+      hasName: Boolean(daily && daily.name === path.basename(dailyFile)),
       existsMatchesDisk: Boolean(daily && daily.exists) === existedBefore,
       didNotCreateFile: fs.existsSync(dailyFile) === existedBefore,
       readContentWhenExists: !existedBefore || (typeof daily.content === 'string' && daily.content.length > 0)
@@ -1242,6 +1285,12 @@ function toggleFloatingWindow() {
 
 app.whenReady().then(() => {
   registerIpcHandlers();
+  // 一次性把旧平铺的 journals/2026-10-07.md 迁进 年/月 文件夹（只跑一次，目录里留标记）
+  migrateFlatJournals(journalsDir())
+    .then((report) => {
+      if (report.needed && report.moved.length) console.log(`[bujo] 已把 ${report.moved.length} 篇旧日记迁入 年/月 文件夹`);
+    })
+    .catch((err) => console.error('[bujo] 日记目录迁移失败：' + (err && err.message)));
   // 去掉主窗口的默认系统菜单栏（文件/编辑/视图…）：应用自己的操作都在页面里。
   // Windows/Linux 用 Menu.setApplicationMenu(null)；macOS 若置空会连复制粘贴等快捷键一起丢，
   // 但本项目窗口本来就是无边框自绘，只处理非 macOS。
