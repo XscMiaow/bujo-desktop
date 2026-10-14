@@ -19,6 +19,7 @@ const {
   ensureFutureLog,
   dailyJournalPath,
   migrateFlatJournals,
+  ensureMoveDestination,
   STRUCTURE_MARKER
 } = require('../src/main/journal-service.js');
 const {
@@ -214,6 +215,37 @@ test('一次性迁移：平铺的日期日记与月记移进 年/月 文件夹�
     await fs.readFile(path.join(dir2, '2026', '2026-10', '2026-10-07.md'), 'utf8'),
     '# 已存在\n'
   );
+});
+
+test('ensureMoveDestination：明天/下月跨月跨年归位，未来记录按年建', async () => {
+  const dir = path.join(tmpDir, 'move-dest');
+
+  const tomorrow = await ensureMoveDestination(dir, { kind: 'tomorrow', date: '2026-12-31' });
+  assert.equal(path.relative(dir, tomorrow.path).replaceAll('\\', '/'), '2027/2027-01/2027-01-01.md', '跨年也归位正确');
+  assert.equal(tomorrow.label, '明天（2027-01-01）的日记');
+  assert.ok((await fs.readFile(tomorrow.path, 'utf8')).startsWith('# 2027-01-01'));
+
+  const next = await ensureMoveDestination(dir, { kind: 'nextMonth', date: '2026-12-05' });
+  assert.equal(path.relative(dir, next.path).replaceAll('\\', '/'), '2027/2027-01/月度记录.md');
+  assert.equal(next.label, '2027 年 1 月 · 月度记录');
+  assert.equal(await fs.readFile(next.path, 'utf8'), monthlyTemplate(new Date(2027, 0, 1)));
+
+  const future = await ensureMoveDestination(dir, { kind: 'future', date: '2026-10-13' });
+  assert.equal(path.relative(dir, future.path).replaceAll('\\', '/'), '2026/未来记录.md');
+  assert.equal(future.label, '2026 年 · 未来记录');
+
+  // 字符串简写、重复调用不覆盖
+  assert.equal((await ensureMoveDestination(dir, 'future')).created, false);
+  // 简写不带 date：以当前日期为基准，去的是「今天的明天」（按当下动态算，不硬编码，免得跨天翻车）
+  const now = new Date();
+  const tomorrowKey = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1);
+  const expectedFile = `${tomorrowKey.getFullYear()}-${String(tomorrowKey.getMonth() + 1).padStart(2, '0')}-${String(tomorrowKey.getDate()).padStart(2, '0')}.md`;
+  const tomorrowPlain = await ensureMoveDestination(dir, 'tomorrow');
+  assert.ok(tomorrowPlain.path.replaceAll('\\', '/').endsWith(`/${tomorrowKey.getFullYear()}/${tomorrowKey.getFullYear()}-${String(tomorrowKey.getMonth() + 1).padStart(2, '0')}/${expectedFile}`),
+    `简写 should 取今天+1（${expectedFile}），实际 ${tomorrowPlain.path}`);
+  assert.equal((await ensureMoveDestination(dir, 'tomorrow')).created, false);
+
+  await assert.rejects(() => ensureMoveDestination(dir, 'yesterday'), /未知的迁移目的地/);
 });
 
 test('日期与年月标签按本地时间算', () => {

@@ -11,10 +11,16 @@ const {
   ensureMonthlyJournal,
   ensureFutureLog,
   dailyJournalPath,
+  ensureMoveDestination,
   migrateFlatJournals
 } = require('./journal-service');
-const { appendToNote, readNote, integrateNoteFile, setBulletMark, isInsideDirectory } = require('./note-service');
+const { appendToNote, readNote, integrateNoteFile, setBulletMark, moveBullet, isInsideDirectory } = require('./note-service');
 const { SettingsService, DEFAULT_SETTINGS, LEGACY_SYSTEM_PROMPTS } = require('./settings-service');
+const { listThemes, isValidThemeId } = require('./theme-service');
+
+/** 主题文件夹：跟页面放一起，里面的每个 .css（除 base.css 布局基底）都是可选主题 */
+const STYLES_DIR = path.join(__dirname, '..', 'renderer', 'styles');
+const DEFAULT_THEME = 'dark';
 const { streamChat } = require('./chat-service');
 const { buildSystemPrompt } = require('../shared/ai-reply.js');
 const { buildNoteContext } = require('../shared/note-context.js');
@@ -22,6 +28,16 @@ const { parseMonthKey, parseYearKey } = require('../shared/journal-date.js');
 
 const isSmokeTest = process.argv.includes('--smoke-test');
 let mainWindow = null;
+
+// 自检用完全独立的 userData（设置/缓存/悬浮窗位置）：
+// 不去碰正在运行的正式应用的 settings.json 与磁盘缓存，也避免两个进程抢同一份文件。
+if (isSmokeTest && app) {
+  try {
+    app.setPath('userData', path.join(os.tmpdir(), `bujo-smoke-userdata-${process.pid}`));
+  } catch {
+    // 设置不上就沿用默认，只影响并发时可能出现读写冲突
+  }
+}
 
 /** 自检截图输出目录 */
 const screenshotsDir = path.join(__dirname, '..', '..', 'screenshots');
@@ -364,6 +380,15 @@ function registerIpcHandlers() {
 
   ipcMain.handle('settings:get', () => getSettings().getPublic());
 
+  // 主题列表：styles 文件夹里的 每个 .css（除 base.css 布局基底）都是一个可选主题
+  ipcMain.handle('themes:list', () => {
+    try {
+      return { ok: true, ...listThemes(STYLES_DIR) };
+    } catch (err) {
+      return { ok: false, error: err.message, dir: STYLES_DIR, themes: [] };
+    }
+  });
+
   ipcMain.handle('settings:save', (_event, patch) => {
     const result = getSettings().save(patch || {});
     return result.ok ? { ok: true, settings: result.settings } : result;
@@ -484,7 +509,24 @@ function registerIpcHandlers() {
     }
   });
 
-  // 渲染层需要它来决定打开哪一个 .md（启动参数里的文件）
+  // 迁移 / 推迟一条条目：原文就地标 [>]/[<]，目标日志自动建好
+  ipcMain.handle('note:move', async (_event, payload = {}) => {
+    try {
+      const source = assertWritableTarget(payload.filePath);
+      const destination = payload.destination || {};
+      // 明天是「推迟」（[<]），下月/未来记录是「迁移」（[>]）
+      const kind = destination.kind || destination;
+      const result = await moveBullet(source, (await ensureMoveDestination(journalsDir(), destination)).path, {
+        line: payload.line,
+        text: payload.text,
+        mode: kind === 'tomorrow' ? 'postpone' : 'migrate'
+      });
+      rememberWritable(result.destPath);
+      return { ok: true, destinationKind: kind, ...result };
+    } catch (err) {
+      return { ok: false, error: err.message };
+    }
+  });    // 渲染层需要它来决定打开哪一个 .md（启动参数里的文件）
   ipcMain.handle('app:initial-file', () => initialMarkdownArg());
 }
 
@@ -823,7 +865,16 @@ function lastUserMessage(requests) {
  */
 function writeChatReviewPage(fs, parts) {
   try {
-    const css = fs.readFileSync(path.join(__dirname, '..', 'renderer', 'styles.css'), 'utf8');
+    // 复核页用与界面同一套样式：布局基底 + 当前主题（跟设置里存的一致）
+    const currentTheme = getSettings().getPublic().theme || DEFAULT_THEME;
+    const themeCss = (() => {
+      try {
+        return fs.readFileSync(path.join(STYLES_DIR, `${isValidThemeId(currentTheme) ? currentTheme : DEFAULT_THEME}.css`), 'utf8');
+      } catch {
+        return ''; // 主题文件缺了就不追加，base.css 的回退 token 会让页面仍然是可读的深色
+      }
+    })();
+    const css = fs.readFileSync(path.join(STYLES_DIR, 'base.css'), 'utf8');
     const reviewPath = path.join(screenshotsDir, 'chat-panel.html');
     const html = [
       '<!doctype html>',
@@ -831,7 +882,7 @@ function writeChatReviewPage(fs, parts) {
       '<head>',
       '<meta charset="utf-8">',
       '<title>聊天面板与设置复核</title>',
-      `<style>${css}</style>`,
+      `<style>${css}${themeCss}</style>`,
       '<style>body{display:block;height:auto;padding:14px;overflow:auto}',
       '.chat-panel{height:620px;border:1px solid var(--border);border-radius:10px;overflow:hidden}',
       // 弹窗在复核页里平铺展示，不要盖住整页
@@ -936,8 +987,40 @@ async function runMarksSmoke(win, fs) {
       noteRestoredToNote: afterLines.includes('- 整理收件箱') && !afterLines.includes('- [-n] 整理收件箱')
     };
 
+    // 迁移/推迟端到端：把「买牛奶」推迟到明天的日记（[<]），把笔记「整理收件箱」迁到下个月（[>]）
+    const moveTom = await win.webContents.executeJavaScript(`window.__bujoSmokeTestMove('tomorrow', '买牛奶')`);
+    const moveMonth = await win.webContents.executeJavaScript(`window.__bujoSmokeTestMove('nextMonth', '整理收件箱')`);
+    // 迁移闭环：已迁移的条目再迁会被拒 → 取消迁移 → 重新迁移（= 重新迁移旧项目），目标不重复加
+    const remigrate = await win.webContents.executeJavaScript(`window.__bujoSmokeTestRemigrate('整理收件箱')`);
+    const moved = fs.readFileSync(notePath, 'utf8');
+
+    const tomorrowDate = new Date();
+    tomorrowDate.setDate(tomorrowDate.getDate() + 1);
+    const tomorrowPath = dailyJournalPath(journalsDir(), tomorrowDate);
+    let monthlySheet = null;
+    try {
+      const listed = await listJournals(journalsDir());
+      const monthlyFile = listed.files.find((f) => f.role === 'monthly');
+      monthlySheet = monthlyFile ? await readNote(monthlyFile.path) : null;
+    } catch { /* 列不到就算移目标没检查到 */ }
+
+    const move = {
+      steps: { tomorrow: moveTom, nextMonth: moveMonth },
+      sourceMarked: /- \[<\] 买牛奶/.test(moved) && /- \[>\] 整理收件箱/.test(moved),
+      nothingDeletedPostMove: moved.replace(/\s+$/, '').split('\n').length === beforeLines.length,
+      tomorrowDaily: fs.existsSync(tomorrowPath) && fs.readFileSync(tomorrowPath, 'utf8').includes('- [ ] 买牛奶'),
+      monthlyGotNote: Boolean(monthlySheet && monthlySheet.includes('- 整理收件箱')),
+      remigrate
+    };
+
     return {
-      ok: Boolean(clickReport && clickReport.ok) && Object.values(file).every(Boolean),
+      ok:
+        Boolean(clickReport && clickReport.ok) &&
+        Object.values(file).every(Boolean) &&
+        move.steps.tomorrow.ok && move.steps.nextMonth.ok &&
+        move.sourceMarked && move.nothingDeletedPostMove &&
+        move.tomorrowDaily && move.monthlyGotNote &&
+        Boolean(move.remigrate && move.remigrate.ok),
       steps: clickReport && clickReport.steps,
       alreadyActs: clickReport && clickReport.alreadyActs,
       inventory: clickReport && clickReport.inventory,
@@ -945,6 +1028,7 @@ async function runMarksSmoke(win, fs) {
       layout: clickReport && clickReport.layout,
       toast: clickReport && clickReport.toast,
       toastShown: clickReport && clickReport.toastShown,
+      move,
       file
     };
   } catch (err) {
@@ -1087,6 +1171,17 @@ async function runChatSmokeTest(win) {
     // 手工改条目状态：真的去点界面上的按钮，再看文件里那一行变成了什么
     report.marks = await runMarksSmoke(win, fs);
     report.ok = report.ok && Boolean(report.marks && report.marks.ok);
+
+    // 界面主题：styles 文件夹里两套 css 真的可切（浅色与深色的计算样式必须不同）
+    try {
+      report.theme = await win.webContents.executeJavaScript('window.__bujoSmokeTestTheme()');
+      report.ok = report.ok && Boolean(report.theme && report.theme.ok);
+      const themeList = await getSettings().getPublic();
+      report.themeOk = Boolean(report.theme && report.theme.ok && themeList && themeList.theme);
+    } catch (err) {
+      report.theme = { ok: false, error: err.message };
+      report.ok = false;
+    }
 
     // 悬浮小窗：开 → 检查精简页形态（当天日记自动载入、聊天展开、主窗口隐藏）→ 关 → 主窗口恢复
     report.floating = await runFloatingSmoke(win, fs);
@@ -1231,6 +1326,19 @@ function createFloatingWindow() {
   floatingWindow.loadFile(path.join(__dirname, '..', 'renderer', 'index.html'), { query: { floating: '1' } });
 
   // 上次用过的位置/大小还回来；没存过就保持默认居中
+  // 悬浮小窗要求永远置顶：Windows 上刚创建的窗口（尤其是整窗隐藏着创建的自检窗）
+  // 构造参数与第一次 setAlwaysOnTop 偶发不落到窗口状态上，
+  // 所以分层声明（screen-saver 级，高于普通置顶窗）并延迟重试，show 时再补记一次
+  const assertFloatingTop = () => {
+    if (floatingWindow && !floatingWindow.isDestroyed() && !floatingWindow.isAlwaysOnTop()) {
+      floatingWindow.setAlwaysOnTop(true, 'screen-saver');
+    }
+  };
+  floatingWindow.once('show', assertFloatingTop);
+  setTimeout(assertFloatingTop, 80);
+  setTimeout(assertFloatingTop, 420);
+  assertFloatingTop();
+
   restoreFloatingBounds(floatingWindow);
 
   // 拖动/缩放结束就记位置；moved 事件 Windows/macOS 都有，move 是 Linux 兜底（多余触发只是重写一次）

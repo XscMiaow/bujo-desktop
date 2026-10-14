@@ -7,7 +7,9 @@
       content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self';"
     />
     <title>子弹笔记</title>
-    <link rel="stylesheet" href="styles.css" />
+    <link rel="stylesheet" href="styles/base.css" />
+    <!-- 主题文件由 styles/ 文件夹提供；renderer 启动后按设置切到里对应的那份 -->
+    <link rel="stylesheet" id="theme-style" href="styles/dark.css" />
   </head>
   <body>
     <header class="toolbar">
@@ -25,6 +27,7 @@
         </div>
         <button id="chat-toggle" class="btn" type="button" title="AI 聊天（Ctrl/Cmd + J）">AI 聊天</button>
         <button id="floating-toggle" class="btn" type="button" title="切换到悬浮小窗：显示当天笔记要点与精简聊天">悬浮小窗</button>
+        <select id="theme-select" class="btn" title="界面主题（浅色/深色等）" aria-label="界面主题"></select>
         <button id="settings-open" class="icon-btn" type="button" title="AI 设置" aria-label="AI 设置">⚙</button>
       </div>
     </header>

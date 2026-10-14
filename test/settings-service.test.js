@@ -41,6 +41,7 @@ test('默认设置：没有密钥，返回预设列表', () => {
   assert.equal(settings.hasApiKey, false);
   assert.equal(settings.apiKey, undefined, '给渲染层的设置里不能有 apiKey 字段');
   assert.equal(settings.baseUrl, 'https://api.openai.com/v1');
+  assert.equal(settings.theme, 'dark', '没存过 theme 时默认深色');
   assert.equal(settings.encryptionAvailable, true);
   assert.ok(settings.presets.some((preset) => preset.id === 'deepseek'));
   assert.ok(PROVIDER_PRESETS.length >= 5);
@@ -63,6 +64,13 @@ test('保存密钥后：磁盘上是密文，渲染层只拿到末四位', () =>
 
   assert.equal(service.getForRequest().apiKey, 'sk-test-1234abcd', '主进程能解出明文用于请求');
   assert.equal(service.getPublic().apiKey, undefined, '渲染层永远拿不到明文');
+
+  // 界面主题：合法 id 保存，非法值不覆盖，getPublic 永远给出合法值
+  assert.equal(service.getPublic().theme, 'dark');
+  assert.equal(service.save({ theme: 'light' }).settings.theme, 'light');
+  assert.equal(service.save({ theme: 'HAS SPACE' }).settings.theme, 'light', '非法不覆盖');
+  assert.equal(service.save({ theme: '../dark' }).settings.theme, 'light', '路径注入不生效');
+  assert.equal(service.getPublic().theme, 'light', '回读仍是 light');
 });
 
 test('patch.apiKey 为空表示不改动；clearApiKey 才删除', () => {

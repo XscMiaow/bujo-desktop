@@ -5,6 +5,7 @@ const path = require('node:path');
 
 const {
   dailyFileName,
+  dateKey,
   dateLabel,
   yearFolderName,
   monthFolderName,
@@ -273,6 +274,49 @@ async function ensureFutureLog(dir, date = new Date()) {
   return ensureJournalFile(dir, futureRelativePath(date), futureTemplate(date));
 }
 
+/* ---------------- 迁移 / 推迟的目标日志 ---------------- */
+
+/**
+ * 解析「迁移 / 推迟」要去的日记并确保它存在（不存在才按模板建，绝不覆盖）：
+ *   tomorrow     → 明天的每日记录（2026/2026-10/2026-10-14.md，跨月跨年自动归位）
+ *   nextMonth    → 下个月的月度记录（2026/2026-11/月度记录.md，跨年归到下年）
+ *   future       → 今年的年度（未来）记录（2026/未来记录.md）
+ *
+ * spec 可以是上面三个字符串之一，也可以是 { kind, date }，date 是 'YYYY-MM-DD' 或 Date。
+ * @returns {Promise<{ path: string, name: string, kind: string, dateKey: string, label: string, created: boolean }>}
+ */
+async function ensureMoveDestination(dir, spec = {}) {
+  const kind = typeof spec === 'string' ? spec : spec && spec.kind;
+  const base = typeof spec === 'object' && spec && spec.date
+    ? parseDateKey(spec.date) || new Date()
+    : new Date();
+
+  let targetDate;
+  if (kind === 'tomorrow') {
+    targetDate = new Date(base.getFullYear(), base.getMonth(), base.getDate() + 1);
+  } else if (kind === 'nextMonth') {
+    targetDate = new Date(base.getFullYear(), base.getMonth() + 1, 1);
+  } else if (kind === 'future') {
+    targetDate = base;
+  } else {
+    throw new Error(`未知的迁移目的地：${String(kind)}（可选：tomorrow / nextMonth / future）`);
+  }
+
+  let journal;
+  if (kind === 'tomorrow') journal = await ensureDailyJournal(dir, targetDate);
+  else if (kind === 'nextMonth') journal = await ensureMonthlyJournal(dir, targetDate);
+  else journal = await ensureFutureLog(dir, targetDate);
+
+  const label =
+    kind === 'tomorrow'
+      ? `明天（${dateKey(targetDate)}）的日记`
+      : kind === 'nextMonth'
+        ? `${monthLabel(targetDate)} · 月度记录`
+        : `${yearLabel(targetDate)} · 未来记录`;
+
+  return { path: journal.path, name: journal.name, kind, dateKey: dateKey(targetDate), label, created: journal.created };
+}
+
 /* ---------------- 一次性迁移旧平铺目录 ---------------- */
 
 /**
@@ -364,6 +408,7 @@ module.exports = {
   ensureMonthlyJournal,
   ensureFutureLog,
   ensureJournalFile,
+  ensureMoveDestination,
   migrateFlatJournals,
   STRUCTURE_MARKER,
   JOURNAL_EXTENSIONS,

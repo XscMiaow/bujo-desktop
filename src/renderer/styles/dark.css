@@ -1,0 +1,71 @@
+/**
+ * 深色主题（默认）：与 base.css 里的回退值一致，单独成文件便于主题切换机制统一管理。
+ * 所有 token 的定义见 base.css 的 :root 块——这里是完整的一套，缺了哪个界面就用回退值。
+ */
+
+:root {
+  color-scheme: dark;
+
+  --bg: #14161c;
+  --bg-elevated: #1b1e27;
+  --bg-hover: #232734;
+  --border: #2b3040;
+  --text: #e6e8ef;
+  --text-dim: #9aa2b6;
+  --accent: #6ea8fe;
+
+  --kind-task: #7aa2f7;
+  --kind-done: #6dbf8b;
+  --kind-cancelled: #7c8499;
+  --kind-migrated: #bb9af7;
+  --kind-scheduled: #4fc1d6;
+  --kind-priority: #e0af68;
+  --kind-note: #9aa2b6;
+  --kind-event: #f7768e;
+
+  --scrollbar: #33384a;
+  --scrollbar-strong: #454c63;
+  --bg-panel: #171a22;
+
+  --journal-selected: #262c3b;
+  --journal-active: #223047;
+  --btn-hover-border: #3d4457;
+  --btn-hover-bg: #2a2f3d;
+  --accent-text: #0e1220;
+  --accent-hover: #85b6ff;
+
+  --chat-user-border: #2f3b52;
+  --chat-user-bg: #1d2330;
+  --chat-journal-border: #33405c;
+  --chat-journal-bg: #161c2a;
+  --note-border: #3a4054;
+  --chat-context-border: #2a3348;
+  --chat-editops-border: #2b3448;
+  --chat-editops-bg: #141926;
+  --chat-editop-bg: #222a3d;
+
+  --chip-bg: #1f2940;
+  --chip-text: #9fb2d6;
+  --code-bg: #10121a;
+  --code-text: #c8cede;
+  --text-soft: #cfd8ea;
+
+  --danger-border: #6b2734;
+  --danger-bg: #2a161c;
+  --danger-text: #ffb3c0;
+  --overlay-bg: #0b0d12cc;
+  --shadow-color: rgba(0, 0, 0, 0.45);
+  --shadow-strong: #0009;
+
+  --priority-bg: #e0af680d;
+  --priority-bg-hover: #e0af681a;
+  --act-bg: #1b1e27;
+  --act-hover-border: #3d4459;
+  --done-deco: #6dbf8b88;
+  --cancelled-border: #3d4353;
+  --cancelled-bg: #12141bcc;
+  --cancelled-bg-hover: #171a24;
+  --cancelled-deco: #8d94a8aa;
+  --cancelled-text: #6b7280;
+  --stamp-bg: #1b1e27f2;
+}

@@ -1,0 +1,72 @@
+/**
+ * 浅色主题：纸面感的浅色界面，与深色一套 token 完全对齐。
+ * 要新增主题（比如高对比、暖纸色），照这个文件复制一份改成 token 值即可——
+ * 放进 styles/ 目录，重启应用就会出现在主界面的主题下拉里。
+ */
+
+:root {
+  color-scheme: light;
+
+  --bg: #f4f5f7;
+  --bg-elevated: #ffffff;
+  --bg-hover: #e8ecf2;
+  --border: #d8dde6;
+  --text: #1f2430;
+  --text-dim: #5d6678;
+  --accent: #3067e8;
+
+  --kind-task: #2b66d9;
+  --kind-done: #1e7f4d;
+  --kind-cancelled: #7a8296;
+  --kind-migrated: #7d4fc9;
+  --kind-scheduled: #0f8b9e;
+  --kind-priority: #b97324;
+  --kind-note: #667089;
+  --kind-event: #d64565;
+
+  --scrollbar: #c9d0da;
+  --scrollbar-strong: #9aa5b4;
+  --bg-panel: #edf0f4;
+
+  --journal-selected: #e0e7ef;
+  --journal-active: #d9e5fb;
+  --btn-hover-border: #c2cad8;
+  --btn-hover-bg: #e4e9f0;
+  --accent-text: #ffffff;
+  --accent-hover: #1f5cd0;
+
+  --chat-user-border: #c6d6f2;
+  --chat-user-bg: #e9f0fc;
+  --chat-journal-border: #c6d6f2;
+  --chat-journal-bg: #f2f7ff;
+  --note-border: #ccd3de;
+  --chat-context-border: #d5dbe6;
+  --chat-editops-border: #d5dbe6;
+  --chat-editops-bg: #eef2f8;
+  --chat-editop-bg: #e2e8f2;
+
+  --chip-bg: #e3ebfa;
+  --chip-text: #35548a;
+  --code-bg: #f0f2f6;
+  --code-text: #333c4e;
+  --text-soft: #2c3546;
+
+  --danger-border: #e3b3b8;
+  --danger-bg: #fdecee;
+  --danger-text: #b3253e;
+  --overlay-bg: rgba(40, 46, 60, 0.42);
+  --shadow-color: rgba(30, 40, 60, 0.18);
+  --shadow-strong: rgba(30, 40, 60, 0.3);
+
+  --priority-bg: rgba(224, 175, 104, 0.14);
+  --priority-bg-hover: rgba(224, 175, 104, 0.24);
+  --act-bg: #ffffff;
+  --act-hover-border: #c2cad8;
+  --done-deco: rgba(30, 127, 77, 0.55);
+  --cancelled-border: #ccd3de;
+  --cancelled-bg: rgba(242, 244, 248, 0.85);
+  --cancelled-bg-hover: #e8edf3;
+  --cancelled-deco: rgba(122, 130, 150, 0.7);
+  --cancelled-text: #8b93a8;
+  --stamp-bg: rgba(255, 255, 255, 0.95);
+}

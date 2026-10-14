@@ -1020,7 +1020,7 @@ window.__bujoSmokeTestChat = async (expectReply) => {
 
 /**
  * 自检用：交出聊天面板与设置弹窗的真实 DOM（去掉 hidden），
- * 主进程把它们和 styles.css 拼成复核页，能直接打开看实际排版与提示词。
+ * 主进程把它们和 styles/base.css（加上当前主题 css）拼成复核页，能直接打开看实际排版与提示词。
  */
 window.__bujoChatReviewHtml = async () => {
   // 把设置表单填好，才能看到「系统提示词」和自动追加的格式约定

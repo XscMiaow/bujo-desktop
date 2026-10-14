@@ -91,7 +91,7 @@ class SettingsService {
     return raw.systemPrompt;
   }
 
-  /** 可以安全交给渲染层的部分：不含 key，只含 key 是否已配置与末四位提示 */
+    /** 可以安全交给渲染层的部分：不含 key，只含 key 是否已配置与末四位提示 */
   getPublic() {
     const raw = this.readRaw();
     return {
@@ -100,6 +100,8 @@ class SettingsService {
       provider: typeof raw.provider === 'string' ? raw.provider : DEFAULT_SETTINGS.provider,
       systemPrompt: this.resolveSystemPrompt(raw),
       temperature: typeof raw.temperature === 'number' ? raw.temperature : DEFAULT_SETTINGS.temperature,
+      // 界面主题（styles/ 文件夹里那份 css 的 id）；坏值/conflict 都回落到默认深色
+      theme: typeof raw.theme === 'string' && /^[a-z0-9-]{1,24}$/.test(raw.theme) ? raw.theme : 'dark',
       hasApiKey: Boolean(raw.apiKeyCipher || raw.apiKey),
       apiKeyHint: typeof raw.apiKeyHint === 'string' ? raw.apiKeyHint : null,
       encrypted: Boolean(raw.apiKeyCipher) && this.encryptor.isAvailable(),
@@ -149,6 +151,10 @@ class SettingsService {
     if (typeof patch.systemPrompt === 'string') raw.systemPrompt = patch.systemPrompt;
     if (typeof patch.temperature === 'number' && Number.isFinite(patch.temperature)) {
       raw.temperature = Math.min(2, Math.max(0, patch.temperature));
+    }
+    // 界面主题：只认短小写字母数字与连字符，别的不动
+    if (typeof patch.theme === 'string' && /^[a-z0-9-]{1,24}$/.test(patch.theme)) {
+      raw.theme = patch.theme;
     }
 
     // 悬浮小窗位置（bounds 才能完整恢复；只存数字，坏值直接忽略）

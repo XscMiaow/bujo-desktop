@@ -242,12 +242,188 @@ async function setBulletMark(filePath, target = {}) {
   );
 }
 
+/**
+ * 迁移 / 推迟一条条目到另一篇日记。
+ *
+ * 语义（与子弹笔记的 [>] 迁移、[<] 计划一致）：
+ *   - 原文**就地保留**在源文件里，标记改成 [>]（迁移）或 [<]（推迟）——不是删除；
+ *     优先标志随标记一起走（[!] → [>!] / [<!]）。
+ *   - 只能搬「还没做完」的：待办/优先/笔记/事件/已计划（[<]）可以再迁；
+ *     已迁移（[>]）、已划去、已完成的源行一律拒绝——先取消迁移/恢复，再搬。
+ *     迁到目标日志里的副本是新条目，它自己再迁一次就是「重新迁移旧项目」，不受此限。
+ *   - 目标日记里补同内容的条目：类型与优先保持（待办→[ ]、[!]→[!]、笔记→原生、事件→o），
+ *     用整合规则写入：重复不会越迁越多。
+ *   - 顺序：锁定源文件定位解析 → 写目标 → 改源标记；目标写入失败则源文件一行不动。
+ *
+ * @param {string} sourcePath
+ * @param {string} destPath 目标日记文件（应已由 ensureMoveDestination 建好）
+ * @param {{ line?: number, text?: string, mode?: 'migrate'|'postpone' }} [params]
+ *   text 是条目正文（renderer 的 dataset.text / CLI 的参数）；line 是可选的行号提示
+ * @returns {Promise<{ mode:string, path:string, name:string, line:number, before:string, after:string, changed:boolean,
+ *                     destPath:string, destName:string, destChanged:boolean, destAdded:number, destReport:object }>}
+ */
+async function moveBullet(sourcePath, destPath, params = {}) {
+  const source = assertWritable(sourcePath);
+  const dest = assertWritable(destPath);
+  const mode = params.mode === 'postpone' ? 'postpone' : 'migrate';
+  const movedMark = mode === 'postpone' ? '<' : '>';
+  const wanted = normalizeForMatch(params.text);
+  if (!wanted) throw new Error('这一条没有可比对的内容');
+
+  // 1) 锁定源文件：定位解析，算出「原文的新标记」与「目标条目」，先不落盘
+  const plan = await submit(() =>
+    withFileLock(source, () => readNote(source).then((sourceText) => {
+      const text = sourceText.replace(/\r\n?/g, '\n');
+      if (!text.trim()) throw new Error('源笔记里已经没有内容');
+      const lines = text.replace(/\s+$/, '').split('\n');
+
+      let index = Number.isInteger(params.line) && params.line >= 0 && params.line < lines.length ? params.line : -1;
+      if (index === -1 || normalizeForMatch(lines[index]) !== wanted) index = locateBullet(lines, wanted);
+
+      const before = lines[index];
+      const parsed = parseBulletLine(before);
+      if (!parsed) throw new Error('这一行已经不是条目了，已重新载入');
+
+      // 迁移的规矩：已迁移（[>]）/已划去/已完成的条目不能再从原地搬一次，
+      // 先「取消迁移/恢复」回到普通状态，再搬；目标日志里的副本自己再迁一次，
+      // 就等于把这件事重新迁到新的位置（重新迁移旧项目），不受这里限制
+      if (parsed.kind === 'migrated') {
+        throw new Error('已迁移（[>]）的条目不能继续迁移，请先「取消迁移」再搬');
+      }
+      if (parsed.kind === 'cancelled') {
+        throw new Error('已划去的条目不能迁移，先恢复为原来的类型再搬');
+      }
+      if (parsed.kind === 'done') {
+        throw new Error('已完成的条目不能迁移，先取消完成再搬');
+      }
+
+      // 目标条目：同一件事「重开」为未完成态，类型与优先保持
+      const priorKind = parsed.kind;
+      const destBase = priorKind === 'note' ? 'n' : priorKind === 'event' ? 'e' : ' ';
+      const plain = setMark(before, destBase); // 恢复为未完成（保留优先 → [!]/[n!]/[e!]）
+      const destLine = parsed.priority ? setMark(plain, '+!') : plain;
+      if (!destLine) throw new Error('这一条没有可比对的内容');
+
+      return {
+        index,
+        before,
+        priorKind,
+        after: setMark(before, movedMark),
+        destLine
+      };
+    }))
+  );
+
+  // 2) 写目标日记：先去重算出 accepted，再插到对应小节（任务/笔记）下；路径外部已建好
+  const destResult = await submit(() =>
+    withFileLock(dest, async () => {
+      let existing = '';
+      try {
+        existing = await readNote(dest);
+      } catch (err) {
+        if (!/不存在/.test(err.message)) throw err; // 目标被外部删掉了：当作空文件重建
+      }
+
+      const { report } = integrate(existing.trimEnd(), { lines: [plan.destLine], dedupe: true });
+      const destName = path.basename(dest);
+      if (!report.added.length && !report.merged.length && !report.edits.applied.length) {
+        return { destName, destChanged: false, destAdded: 0, destReport: report };
+      }
+
+      // 合并改动（目标里已有同内容的划去条目等）:直接用 integrate 的结果
+      if (report.merged.length || report.edits.applied.length) {
+        const { text } = integrate(existing.trimEnd(), { lines: [plan.destLine], dedupe: true });
+        const written = await writeNote(dest, text);
+        return { destName: written.name, destChanged: true, destAdded: written.size, destReport: report };
+      }
+
+      // 纯新增：插进对应小节（任务/笔记）里，没有对应小节才追加到末尾
+      const priorKind = plan.priorKind;
+      const wantedLabel = priorKind === 'note' || priorKind === 'event' ? '笔记' : '任务';
+      const lines = existing.replace(/\r\n?/g, '\n').replace(/\s+$/, '').split('\n');
+      const plan2 = insertionUnderSection(lines, wantedLabel);
+      let text;
+      if (plan2.mode === 'end' || !lines.length) {
+        const { text: appended } = integrate(existing.trimEnd(), { lines: [plan.destLine], dedupe: true });
+        text = appended;
+      } else {
+        lines.splice(plan2.insertAt, 0, plan.destLine);
+        text = `${lines.join('\n')}\n`;
+      }
+      const written = await writeNote(dest, text);
+      return { destName: written.name, destChanged: true, destAdded: written.size, destReport: report };
+    })
+  );
+
+  // 3) 源文件就地标 [>] / [<]（锁内重新读全文，行号可能已被别的进程改过）
+  const sourceResult = await submit(() =>
+    withFileLock(source, async () => {
+      const text = (await readNote(source)).replace(/\r\n?/g, '\n');
+      const lines = text.replace(/\s+$/, '').split('\n');
+
+      let index = plan.index;
+      const valid = Number.isInteger(index) && index >= 0 && index < lines.length && lines[index] === plan.before;
+      if (!valid) index = locateBullet(lines, wanted);
+
+      const before = lines[index];
+      const after = normalizeForMatch(before) === wanted ? setMark(before, movedMark) : '';
+      if (!after) throw new Error('这一条没有可比对的内容（源文件刚被改过，已重新载入）');
+
+      const info = {
+        path: source,
+        name: path.basename(source),
+        line: index,
+        before,
+        after,
+        changed: after !== before
+      };
+      if (after !== before) {
+        const updated = [...lines];
+        updated[index] = after;
+        await writeNote(source, `${updated.join('\n')}\n`);
+      }
+      return info;
+    })
+  );
+
+  return { mode, path: sourceResult.path, ...sourceResult, ...destResult, destPath: dest };
+}
+
+/**
+ * 在「任务 / 笔记」小节的末尾插入新条目的位置；没有这个小节或者条目相关的都不是标题时回退末尾追加。
+ * @param {string[]} lines
+ * @param {string} wantedLabel '任务' 或 '笔记'
+ * @returns {{ mode: 'section'|'end', insertAt?: number }}
+ */
+function insertionUnderSection(lines, wantedLabel) {
+  const headingRe = /^\s*#{1,6}\s+\S/;
+  let headerIndex = -1;
+  for (let i = 0; i < lines.length; i++) {
+    if (!headingRe.test(lines[i])) continue;
+    if (normalizeForMatch(lines[i]) === wantedLabel) {
+      headerIndex = i;
+      break;
+    }
+  }
+  if (headerIndex === -1) return { mode: 'end' };
+
+  let insertAt = headerIndex + 1; // 标题下紧跟一行空白或标题前都可行
+  for (let i = headerIndex + 1; i < lines.length; i++) {
+    if (headingRe.test(lines[i])) break;
+    if (lines[i].trim() !== '') insertAt = i + 1;
+  }
+  /* 把插入点之前紧挨着的空行收掉：别在标题后额外堆一排空行 */
+  while (insertAt > headerIndex + 1 && lines[insertAt - 1] === '') insertAt--;
+  return { mode: 'section', insertAt };
+}
+
 module.exports = {
   appendToNote,
   readNote,
   writeNote,
   integrateNoteFile,
   setBulletMark,
+  moveBullet,
   locateBullet,
   isInsideDirectory,
   assertWritable,

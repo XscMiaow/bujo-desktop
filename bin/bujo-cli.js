@@ -12,6 +12,7 @@
  * 用法：
  *   node bin/bujo-cli.js append <file> "<markdown>" [--create] [--initial "<模板>"]
  *   node bin/bujo-cli.js mark   <file> "<条目正文>" [--line N] [--mark task|done|cancelled]   （默认 done）
+ *   node bin/bujo-cli.js move   <file> "<条目正文>" --to tomorrow|next-month|future [--line N]
  *   node bin/bujo-cli.js read   <file> [--json]
  *
  * 全局选项：--json   机器可读输出；退出码：0 成功，1 用法/参数错误，
@@ -22,18 +23,26 @@
 const path = require('node:path');
 
 const projectRoot = path.resolve(__dirname, '..');
-const { appendToNote, readNote, setBulletMark } = require(path.join(projectRoot, 'src/main/note-service'));
+const { appendToNote, readNote, setBulletMark, moveBullet } = require(path.join(projectRoot, 'src/main/note-service'));
+const { ensureMoveDestination } = require(path.join(projectRoot, 'src/main/journal-service'));
 const { QueueFullError, LockTimeoutError } = require(path.join(projectRoot, 'src/main/write-queue'));
 
 const USAGE = `用法：
   bujo append <file> "<markdown>" [--create] [--initial "<模板文本>"]
   bujo mark   <file> "<条目正文>" [--line N] [--mark task|done|cancelled]
+  bujo move   <file> "<条目正文>" [--line N] --to tomorrow|next-month|future
   bujo read   <file> [--json]
 
 说明：
   append  把一段 Markdown 追加到笔记末尾；--create 允许新建文件（配合 --initial 当初始内容）
   mark    改一条条目的状态：task=待办 [ ]、done=完成 [x]、cancelled=划去 [-]（原文保留，不真删）
           以条目正文定位；同一正文出现多次时会报错，可加 --line 指明行号
+  move    推迟/迁移一条条目：这一行就地标 [<]（tomorrow，推迟到明天）或 [>]（迁移），
+          同时把任务写进目标日志：tomorrow=明天的每日记录
+          next-month=下个月的月度记录；future=今年的未来记录。
+          目标日志按 journals 年/月结构自动建（目录用 BUJO_JOURNALS 环境变量指定，默认 ./journals）
+          已迁移 [>] 的条目不能再迁，先 mark --mark task 取消迁移再搬；
+          迁到目标日志里的副本是新条目，对它再 move 一次就是「重新迁移旧项目」
   read    输出笔记原文（--json 则输出 { ok, path, name, content }）
 
 队列约定：所有写操作与应用内置写入口共用同一套有界串行队列；队列满时立即返回失败（退出码 3）。
@@ -67,7 +76,7 @@ async function main(argv) {
   }
 
   try {
-    if (command === 'append' || command === 'mark' || command === 'read') {
+    if (command === 'append' || command === 'mark' || command === 'move' || command === 'read') {
       const file = operands[0];
       if (!file) fail(2, '缺少文件路径', json);
       return await dispatch({ command, file, operands: operands.slice(1), json });
@@ -99,6 +108,38 @@ async function dispatch({ command, file, operands, json }) {
       initialContent: flags.get('--initial')
     });
     report({ ok: true, command, ...result }, json);
+    return 0;
+  }
+
+  // move：推迟/迁移到指定日记
+  if (command === 'move') {
+    const text = operands[0];
+    if (typeof text !== 'string' || !text.trim()) fail(2, '缺少要迁移的条目正文', json);
+    const flags = collectFlags(operands.slice(1));
+    const rawTo = flags.get('--to');
+    const to = rawTo && String(rawTo).replace(/[-_]/g, '').toLowerCase();
+    const TO_KINDS = { tomorrow: 'tomorrow', nextmonth: 'nextMonth', future: 'future' };
+    if (!to || !TO_KINDS[to]) fail(2, '缺少 --to（可选：tomorrow / next-month / future）', json);
+    const lineValue = Number(flags.get('--line'));
+    const destination = await ensureMoveDestination(
+      process.env.BUJO_JOURNALS || path.join(process.cwd(), 'journals'),
+      TO_KINDS[to]
+    );
+    const isPostpone = TO_KINDS[to] === 'tomorrow';
+    const result = {
+      ...(await moveBullet(resolved, destination.path, {
+        line: Number.isInteger(lineValue) && lineValue >= 0 ? lineValue : undefined,
+        text,
+        mode: isPostpone ? 'postpone' : 'migrate'
+      }))
+    };
+    if (json) console.log(JSON.stringify({ ok: true, command, destinationKind: TO_KINDS[to], destinationPath: destination.path, destinationLabel: destination.label, ...result }));
+    else {
+      const verb = TO_KINDS[to] === 'tomorrow' ? '推迟（原文标 [<]）' : '迁移（原文标 [>]）';
+      const afterSource = `原文：${result.after}`;
+      console.log(`${result.name}：${result.changed ? verb : '本来就是最新（原文不动）'} → ${destination.label}`);
+      console.log(`  ${afterSource}${result.destChanged ? '；目标已新增' : '；目标里已有，不重复写'}`);
+    }
     return 0;
   }
 

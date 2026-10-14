@@ -27,7 +27,8 @@ const els = {
   sidebarRefresh: document.getElementById('sidebar-refresh'),
   sidebarDir: document.getElementById('sidebar-dir'),
   sidebarEmpty: document.getElementById('sidebar-empty'),
-  journalList: document.getElementById('journal-list')
+  journalList: document.getElementById('journal-list'),
+  themeSelect: document.getElementById('theme-select')
 };
 
 const SIDEBAR_KEY = 'bujo.sidebar.collapsed';
@@ -133,6 +134,15 @@ function buildEntryActions(item) {
     acts.append(entryAction('done', '完成', '标记为已完成'));
   }
 
+  // 迁移/推迟的「回退」：这一行恢复为待办；已搬进目标日志的条目原地不动，
+  // 它自己要再搬就等于「重新迁移旧项目」，不需要其他操作。
+  // （已迁移的条目不能从原地再搬一次：先取消迁移，或者去目标日志搬那个副本）
+  if (item.kind === 'migrated') {
+    acts.append(entryAction('restore', '取消迁移', '取消迁移：这一行恢复为待办；迁到目标日志的副本原地不动（继续迁它 = 重新迁移旧项目）'));
+  } else if (item.kind === 'scheduled') {
+    acts.append(entryAction('restore', '取消推迟', '取消推迟：这一行恢复为待办；已写进明天日记的条目原地不动'));
+  }
+
   // 优先开关：任意类型（含已完成/计划/迁移）都能 ★；划去态也保留原优先，可去可加
   acts.append(
     entryAction(
@@ -146,7 +156,81 @@ function buildEntryActions(item) {
     acts.append(entryAction('cancel', '划去', '划去这一条（原文保留在笔记里；恢复时仍能回到原类型）'));
   }
 
+  // 迁移/推迟：待办、笔记、事件、已计划（[<]）的都能再搬；已完成/已划去/已迁移的不给
+  //（已迁移的想再搬：先「取消迁移」，或去目标日志搬那个副本 = 重新迁移旧项目）
+  if (!item.kind || ['task', 'note', 'event', 'scheduled'].includes(item.kind)) {
+    acts.append(entryAction('move', '»', '迁移或推迟这条：明天 / 下个月 / 未来记录（原文保留）'));
+  }
+
   return acts;
+}
+
+/** 迁移/推迟的目的地（与主进程 ensureMoveDestination 的 kind 对齐） */
+const MOVE_OPTIONS = [
+  { destination: 'tomorrow', label: '推迟到明天', hint: '写进明天的日记，这一行标为 [<]' },
+  { destination: 'nextMonth', label: '迁移到下个月', hint: '写进下个月的月度记录，这一行标为 [>]' },
+  { destination: 'future', label: '迁移到未来记录', hint: '写进年度（未来）记录，这一行标为 [>]' }
+];
+
+/** 关掉别的条目还开着的迁移菜单 */
+function closeMoveMenus(exceptEntry) {
+  document.querySelectorAll('.bujo-move-menu').forEach((menu) => {
+    const entry = menu.closest('.bujo-entry');
+    if (!exceptEntry || !entry || entry !== exceptEntry) menu.remove();
+  });
+}
+
+/** 点「»」：弹出本条目的迁移菜单（推送到再点或点别处关闭） */
+function toggleMoveMenu(button) {
+  const entry = button.closest('.bujo-entry');
+  if (!entry) return;
+  const existing = entry.querySelector('.bujo-move-menu');
+  closeMoveMenus(entry);
+  if (existing) return; // 再点一次就是收起
+
+  entry.style.position = entry.style.position && entry.style.position !== 'static' ? entry.style.position : 'relative';
+  const menu = document.createElement('span');
+  menu.className = 'bujo-move-menu';
+  menu.innerHTML = MOVE_OPTIONS.map(
+    (option) =>
+      `<button type="button" class="bujo-move-option" data-move="${option.destination}" title="${escapeHtml(option.hint)}">${escapeHtml(option.label)}</button>`
+  ).join('');
+  entry.append(menu);
+}
+
+/**
+ * 点菜单里的目的地：主进程把这一条搬到目标日志（自动建），原文就地标 [>]/[<]。
+ * 结束后整篇重载 + 刷新侧边栏（目标可能是新文件）。
+ */
+async function applyMoveAction(entry, destination) {
+  const buttons = [...entry.querySelectorAll('.bujo-act')];
+  buttons.forEach((button) => {
+    button.disabled = true;
+  });
+
+  const result = await window.bujo.moveBullet({
+    filePath: state.file.path,
+    line: Number(entry.dataset.line),
+    text: entry.dataset.text || '',
+    destination
+  });
+
+  if (!result || !result.ok) {
+    buttons.forEach((button) => {
+      button.disabled = false;
+    });
+    showError(`迁移失败：${(result && result.error) || '未知错误'}`);
+    return;
+  }
+
+  clearError();
+  const label = result.destinationKind === 'tomorrow' ? '已推迟到明天' : `已迁移到 ${(result && result.destName) || '目标日志'}`;
+  showToast(result.destChanged ? label : `这一条已经在${result.destinationKind === 'tomorrow' ? '明天的日记' : '目标日志'}里（没有重复加）`);
+
+  const scrollTop = els.content.scrollTop;
+  await loadFile(state.file.path);
+  await refreshJournals();
+  els.content.scrollTop = scrollTop;
 }
 
 /** 一个子弹列表 → <ul>，符号由「子弹类型」决定，而不是原始文本 */
@@ -452,6 +536,8 @@ function markForAction(entry, act) {
   if (act === 'restore') {
     // 取消完成 → 改回待办；setMark 会保留原行已有的优先标志（[x!] 恢复回 [!]）
     if (kind === 'done') return ' ';
+    // 取消迁移/取消推迟 → 恢复为普通待办（正文保留，优先标志不动）
+    if (kind === 'migrated' || kind === 'scheduled') return ' ';
     return RESTORE_MARKS[prior] || ' '; // 取消划去 → 回到原来的类型
   }
   return null;
@@ -630,11 +716,33 @@ document.addEventListener('keydown', (event) => {
   }
 });
 
-// 条目上的操作按钮（完成 / 划去 / 恢复）优先，其次是笔记里的外链
+// 点菜单外面 / 按 Esc 关掉迁移菜单
+document.addEventListener('click', (event) => {
+  if (event.target.closest('.bujo-move-menu')) return;
+  if (event.target.closest('.bujo-act[data-act="move"]')) return;
+  closeMoveMenus();
+});
+document.addEventListener('keydown', (event) => {
+  if (event.key === 'Escape') closeMoveMenus();
+});
+
+// 条目上的操作按钮（完成 / 划去 / 恢复 / 迁移菜单）优先，其次是笔记里的外链
 els.note.addEventListener('click', async (event) => {
+  const moveOption = event.target.closest('.bujo-move-option');
+  if (moveOption) {
+    const entry = moveOption.closest('.bujo-entry');
+    closeMoveMenus();
+    if (entry && state.file) await applyMoveAction(entry, moveOption.dataset.move);
+    return;
+  }
+
   const act = event.target.closest('.bujo-act');
   if (act) {
     event.preventDefault();
+    if (act.dataset.act === 'move') {
+      toggleMoveMenu(act);
+      return;
+    }
     await applyBulletAction(act);
     return;
   }
@@ -1199,6 +1307,94 @@ async function waitEntryKind(text, kind, timeout = 3000) {
  * 自检入口 3：真的去点条目上的「完成 / 划去 / 恢复」，验证写回文件的那一行。
  * 线序：待办 → 完成；普通笔记 → 划去 → 恢复回笔记；待办 → 划去 → 恢复；已划去的只能恢复。
  */
+/** 自检：点某条目的「»」→ 选迁移目的地，回传操作前后的状态 */
+window.__bujoSmokeTestMove = async (option, text) => {
+  const entry = findEntryByText(text);
+  const button = entry && entry.querySelector('.bujo-act[data-act="move"]');
+  if (!button) return { ok: false, reason: 'no-move-button', text, option, kindAfter: entry && entry.dataset.kind };
+  button.click();
+  await new Promise((r) => setTimeout(r, 80));
+  const entry2 = findEntryByText(text);
+  const optionBtn = entry2 && entry2.querySelector(`.bujo-move-menu .bujo-move-option[data-move="${option}"]`);
+  if (!optionBtn) return { ok: false, reason: 'no-menu', text, option, kindAfter: entry2 && entry2.dataset.kind };
+  optionBtn.click();
+  await new Promise((r) => setTimeout(r, 450));
+  const afterEntry = findEntryByText(text);
+  return {
+    ok: Boolean(afterEntry && (afterEntry.dataset.kind === 'scheduled' || afterEntry.dataset.kind === 'migrated')),
+    text,
+    option,
+    kindAfter: afterEntry && afterEntry.dataset.kind
+  };
+};
+
+/**
+ * 自检：迁移语义的三步闭环——
+ * ① 已迁移（[>]）的条目不再给「»」，原地直接迁会被判为不可迁；
+ * ② 点「取消迁移」回到普通待办；
+ * ③ 重新迁移（= 重新迁移旧项目）：目标日志里已有一份时不重复加（提示条可验证）。
+ */
+window.__bujoSmokeTestRemigrate = async (text) => {
+  const entry = findEntryByText(text);
+  // ① 已迁移的条目不再给迁移按钮
+  const moveBlocked = Boolean(entry && !entry.querySelector('.bujo-act[data-act="move"]'));
+  if (!entry) return { ok: false, reason: 'no-entry', text, moveBlocked };
+
+  // ② 取消迁移：恢复为普通待办
+  const restore = entry.querySelector('.bujo-act[data-act="restore"]');
+  let restoredKind = null;
+  if (restore) {
+    restore.click();
+    const waited = await waitEntryKind(text, 'task');
+    restoredKind = waited.kind;
+  }
+
+  // ③ 再迁一次：同样落到 [>]；目标已有一份时不重复加
+  let reMovedKind = null;
+  let toastText = '';
+  const button = findEntryByText(text) && findEntryByText(text).querySelector('.bujo-act[data-act="move"]');
+  if (button) {
+    button.click();
+    await new Promise((r) => setTimeout(r, 80));
+    const optionBtn = findEntryByText(text).querySelector('.bujo-move-menu .bujo-move-option[data-move="nextMonth"]');
+    if (optionBtn) {
+      optionBtn.click();
+      await new Promise((r) => setTimeout(r, 450));
+      const afterEntry = findEntryByText(text);
+      reMovedKind = afterEntry && afterEntry.dataset.kind;
+      toastText = els.toast.hidden ? '' : els.toast.textContent;
+    }
+  }
+
+  const ok = moveBlocked && restoredKind === 'task' && reMovedKind === 'migrated' && toastText.includes('没有重复加');
+  return { ok, text, moveBlocked, restoredKind, reMovedKind, toastText, hasMoveAfterRestore: Boolean(button) };
+};
+
+/**
+ * 自检：主题切换真的换了素材并拉动了计算样式——
+ * 从 深→浅→深 切一遍：背景与文字颜色都要变，并回弹到原值。
+ */
+window.__bujoSmokeTestTheme = async () => {
+  const link = document.getElementById('theme-style');
+  const currentThemeId = () => (document.body.dataset.theme || (/styles\/([a-z0-9-]+)\.css/.test(link ? link.getAttribute('href') || '' : '') && RegExp.$1) || 'dark');
+  const read = () => ({
+    body: getComputedStyle(document.body).backgroundColor,
+    text: getComputedStyle(document.body).color,
+    panel: getComputedStyle(document.querySelector('.sidebar') || document.body).backgroundColor
+  });
+  const original = currentThemeId();
+  applyTheme('light');
+  await new Promise((resolve) => setTimeout(resolve, 150));
+  const light = read();
+  applyTheme('dark');
+  await new Promise((resolve) => setTimeout(resolve, 150));
+  const dark = read();
+  applyTheme(original);
+
+  const ok = light.body !== dark.body && light.text !== dark.text && light.panel !== dark.panel && currentThemeId() === 'dark';
+  return { ok, linkHref: link && link.getAttribute('href'), options: els.themeSelect ? els.themeSelect.options.length : 0, light, dark };
+};
+
 window.__bujoSmokeTestMarks = async () => {
   const steps = [];
 
@@ -1271,9 +1467,68 @@ window.__bujoSmokeTestMarks = async () => {
   };
 };
 
+/* ---------------- 界面主题（styles/ 文件夹里的 css 文件） ---------------- */
+
+const DEFAULT_THEME = 'dark';
+
+/** 把 <link id="theme-style"> 换到 styles/<id>.css（base.css 布局基底不动） */
+function applyTheme(id) {
+  const link = document.getElementById('theme-style');
+  if (!link || !/^styles\//.test(link.getAttribute('href') || '') || !/^[a-z0-9-]{1,24}$/.test(String(id))) return;
+  link.setAttribute('href', `styles/${id}.css`);
+  document.body.dataset.theme = id;
+  if (els.themeSelect && [...els.themeSelect.options].some((opt) => opt.value === id)) els.themeSelect.value = id;
+}
+
+/** 启动时：拉主题列表填下拉，再把设置里记的主题套上（坏值回落到默认深色） */
+async function initTheme() {
+  if (!els.themeSelect) return;
+
+  let themes = [];
+  try {
+    const res = await window.bujo.listThemes();
+    themes = (res && res.themes) || [];
+  } catch { /* 主进程还慢着：先不填下拉 */ }
+  if (themes.length) {
+    els.themeSelect.innerHTML = themes
+      .map((theme) => `<option value="${escapeHtml(theme.id)}">${escapeHtml(theme.label)}</option>`)
+      .join('');
+    if (!themes.some((theme) => theme.id === DEFAULT_THEME)) {
+      els.themeSelect.insertAdjacentHTML(
+        'beforeend',
+        `<option value="${DEFAULT_THEME}">${escapeHtml(DEFAULT_THEME)}</option>`
+      );
+    }
+  } else {
+    els.themeSelect.hidden = true; // 连主题列表都读不到时，最多就是保持默认深色
+  }
+
+  // 记住的主题：设置里的值必须还在主题文件夹里，否则回落到默认深色
+  let remembered = DEFAULT_THEME;
+  try {
+    const settings = await window.bujo.getSettings();
+    if (settings && settings.theme) {
+      const known = themes.length ? themes.some((theme) => theme.id === settings.theme) : settings.theme === DEFAULT_THEME;
+      if (known) remembered = settings.theme;
+    }
+  } catch { }
+  applyTheme(remembered);
+}
+
+if (els.themeSelect) {
+  els.themeSelect.addEventListener('change', async () => {
+    const next = els.themeSelect.value;
+    applyTheme(next);
+    try {
+      await window.bujo.saveSettings({ theme: next });
+    } catch { /* 保存失败只影响下次启动，本次界面已生效 */ }
+  });
+}
+
 (async function init() {
   renderLegend();
   renderAll();
+  initTheme();
 
   // 记住上次的折叠状态，但初始化时不要反过来写存储
   const remembered = (() => {

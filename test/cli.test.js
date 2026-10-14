@@ -163,6 +163,51 @@ test('队列满时操作立即失败（退出码 3，EWRITE_QUEUE_FULL）', { ti
   assert.equal(out.trim(), 'EWRITE_QUEUE_FULL');
 });
 
+test('CLI move：推迟/迁移到 journals 年/月 目标，原文保留', { timeout: 30000 }, () => {
+  const fsSync = require('node:fs');
+  const dir = fsSync.mkdtempSync(path.join(os.tmpdir(), 'bujo-move-'));
+  const journals = path.join(dir, 'journals');
+  const file = path.join(dir, 'note.md');
+  fsSync.writeFileSync(file, '- [ ] 写周报\n- [!] 优先改稿\n', 'utf8');
+  const env = { ...process.env, BUJO_JOURNALS: journals };
+
+  const monthly = JSON.parse(run(['move', file, '写周报', '--to', 'next-month', '--json'], { env }));
+  assert.equal(monthly.ok, true);
+  assert.equal(monthly.destinationKind, 'nextMonth');
+  assert.match(monthly.after, /^- \[>\] 写周报$/, '原文就地标 [>]');
+
+  const postponed = JSON.parse(run(['move', file, '优先改稿', '--to', 'tomorrow', '--json'], { env }));
+  assert.equal(postponed.destinationKind, 'tomorrow');
+  assert.match(postponed.after, /^- \[<!\] 优先改稿$/, '推迟标 [<] 且优先标志不丢');
+
+  // 两个文件都在目标里：月度记录有写周报，某篇日记里有优先改稿
+  const sheets = [];
+  (function walk(current) {
+    fsSync.readdirSync(current, { withFileTypes: true }).forEach((entry) => {
+      const full = path.join(current, entry.name);
+      if (entry.isDirectory()) walk(full);
+      else if (entry.name.endsWith('.md')) sheets.push(fsSync.readFileSync(full, 'utf8'));
+    });
+  })(journals);
+  assert.match(sheets.join('\n'), /- \[ \] 写周报/);
+  assert.match(sheets.join('\n'), /- \[!\] 优先改稿/, '优先标志在目标里也保留');
+
+  assert.throws(() => run(['move', file, '写周报', '--to', 'frobnicate'], { env }), (err) => err.status === EXIT.FAIL);
+
+  // 已迁移（[>]）的条目不能再迁：先 mark --mark task 取消迁移，再搬才成功（目标去重不多加）
+  try {
+    run(['move', file, '写周报', '--to', 'future', '--json'], { env });
+    assert.fail('已迁移的条目应当拒绝再迁');
+  } catch (err) {
+    assert.equal(err.status, EXIT.FAIL, '退出码 2');
+    assert.match(`${err.stderr || ''}${err.stdout || ''}`, /取消迁移/, '错误信息提示先取消迁移');
+  }
+  run(['mark', file, '写周报', '--mark', 'task', '--json'], { env });
+  const remigrate = JSON.parse(run(['move', file, '写周报', '--to', 'future', '--json'], { env }));
+  assert.equal(remigrate.ok, true, '取消迁移后可以把它迁去其他日志');
+  assert.match(remigrate.after, /^- \[>\] 写周报$/, '重启后的迁移同样就地标 [>]');
+});
+
 test('CLI 帮助与未知命令', { timeout: 30000 }, () => {
   const help = run(['help']);
   assert.match(help, /bujo append/);

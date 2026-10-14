@@ -15,6 +15,52 @@
   --kind-priority: #e0af68;
   --kind-note: #9aa2b6;
   --kind-event: #f7768e;
+  /* —— 扩展 token：主题文件（styles/dark.css、styles/light.css）据此覆写 —— */
+  --scrollbar: #33384a;
+  --scrollbar-strong: #454c63;
+  --bg-panel: #171a22;
+
+  --journal-selected: #262c3b;
+  --journal-active: #223047;
+  --btn-hover-border: #3d4457;
+  --btn-hover-bg: #2a2f3d;
+  --accent-text: #0e1220;
+  --accent-hover: #85b6ff;
+
+  --chat-user-border: #2f3b52;
+  --chat-user-bg: #1d2330;
+  --chat-journal-border: #33405c;
+  --chat-journal-bg: #161c2a;
+  --note-border: #3a4054;
+  --chat-context-border: #2a3348;
+  --chat-editops-border: #2b3448;
+  --chat-editops-bg: #141926;
+  --chat-editop-bg: #222a3d;
+
+  --chip-bg: #1f2940;
+  --chip-text: #9fb2d6;
+  --code-bg: #10121a;
+  --code-text: #c8cede;
+  --text-soft: #cfd8ea;
+
+  --danger-border: #6b2734;
+  --danger-bg: #2a161c;
+  --danger-text: #ffb3c0;
+  --overlay-bg: #0b0d12cc;
+  --shadow-color: rgba(0, 0, 0, 0.45);
+  --shadow-strong: #0009;
+
+  --priority-bg: #e0af680d;
+  --priority-bg-hover: #e0af681a;
+  --act-bg: #1b1e27;
+  --act-hover-border: #3d4459;
+  --done-deco: #6dbf8b88;
+  --cancelled-border: #3d4353;
+  --cancelled-bg: #12141bcc;
+  --cancelled-bg-hover: #171a24;
+  --cancelled-deco: #8d94a8aa;
+  --cancelled-text: #6b7280;
+  --stamp-bg: #1b1e27f2;
 }
 
 * {
@@ -31,7 +77,7 @@ body {
 
 * {
   scrollbar-width: thin; /* Firefox 兜底 */
-  scrollbar-color: #33384a transparent;
+  scrollbar-color: var(--scrollbar) transparent;
 }
 
 ::-webkit-scrollbar {
@@ -44,12 +90,12 @@ body {
 }
 
 ::-webkit-scrollbar-thumb {
-  background: #33384a;
+  background: var(--scrollbar);
   border-radius: 2px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: #454c63;
+  background: var(--scrollbar-strong);
 }
 
 ::-webkit-scrollbar-corner {
@@ -405,8 +451,8 @@ body.is-floating-collapsed #empty-state {
 }
 
 .btn:hover:not(:disabled) {
-  border-color: #3d4457;
-  background: #2a2f3d;
+  border-color: var(--btn-hover-border);
+  background: var(--btn-hover-bg);
 }
 
 .btn:disabled {
@@ -417,12 +463,12 @@ body.is-floating-collapsed #empty-state {
 .btn.primary {
   border-color: transparent;
   background: var(--accent);
-  color: #0e1220;
+  color: var(--accent-text);
   font-weight: 600;
 }
 
 .btn.primary:hover {
-  background: #85b6ff;
+  background: var(--accent-hover);
 }
 
 .segmented {
@@ -470,7 +516,7 @@ body.is-floating-collapsed #empty-state {
   width: 236px;
   flex: none;
   border-right: 1px solid var(--border);
-  background: #171a22;
+  background: var(--bg-panel);
   transition: width 0.14s ease;
 }
 
@@ -556,12 +602,12 @@ body.is-floating-collapsed #empty-state {
 }
 
 .journal-item.selected {
-  background: #262c3b;
+  background: var(--journal-selected);
 }
 
 .journal-item.active {
   box-shadow: inset 2px 0 0 var(--accent);
-  background: #223047;
+  background: var(--journal-active);
 }
 
 .journal-name {
@@ -611,6 +657,47 @@ body.is-floating-collapsed #empty-state {
   opacity: 0.85;
 }
 
+/* 迁移/推迟菜单（» 按钮弹出）：贴着条目浮出，深色面板 */
+.bujo-move-menu {
+  position: absolute;
+  right: 0;
+  top: 100%;
+  z-index: 40;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 190px;
+  margin-top: 2px;
+  padding: 4px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 10px 28px var(--shadow-color);
+}
+
+.bujo-move-option {
+  text-align: left;
+  background: none;
+  border: 0;
+  color: var(--text);
+  font-size: 12px;
+  padding: 6px 9px;
+  border-radius: 6px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.bujo-move-option:hover {
+  background: var(--bg-hover);
+}
+
+/* saved: 点击过迁移后，重新载入条目时菜单不应残留 */
+.bujo-entry .bujo-move-menu:empty {
+  display: none;
+}
+
+/* 迁移按钮与其它操作按钮同排同级，glyph继承 .bujo-act */
+
 .sidebar-empty {
   padding: 10px 12px;
   color: var(--text-dim);
@@ -626,7 +713,7 @@ body.is-floating-collapsed #empty-state {
   width: 340px;
   flex: none;
   border-left: 1px solid var(--border);
-  background: #171a22;
+  background: var(--bg-panel);
 }
 
 .chat-panel[hidden] {
@@ -683,19 +770,19 @@ body.is-floating-collapsed #empty-state {
   padding: 8px 10px;
   border: 1px solid var(--border);
   border-radius: 8px;
-  background: #1b1e27;
+  background: var(--bg-elevated);
   font-size: 13px;
 }
 
 .chat-msg.from-user {
-  border-color: #2f3b52;
-  background: #1d2330;
+  border-color: var(--chat-user-border);
+  background: var(--chat-user-bg);
 }
 
 .chat-msg.is-error {
-  border-color: #6b2734;
-  background: #2a161c;
-  color: #ffb3c0;
+  border-color: var(--danger-border);
+  background: var(--danger-bg);
+  color: var(--danger-text);
 }
 
 .chat-role {
@@ -725,7 +812,7 @@ body.is-floating-collapsed #empty-state {
   padding: 8px 10px;
   border: 1px solid var(--border);
   border-radius: 6px;
-  background: #10121a;
+  background: var(--code-bg);
   overflow-x: auto;
 }
 
@@ -752,15 +839,15 @@ body.is-floating-collapsed #empty-state {
 
 .chat-journal {
   margin-top: 9px;
-  border: 1px solid #33405c;
+  border: 1px solid var(--chat-journal-border);
   border-left: 3px solid var(--kind-task);
   border-radius: 7px;
-  background: #161c2a;
+  background: var(--chat-journal-bg);
 }
 
 .chat-journal.is-empty {
-  border-left-color: #3a4054;
-  background: #171a22;
+  border-left-color: var(--note-border);
+  background: var(--bg-panel);
 }
 
 /* 等待 AI 回复：占位卡片与「正在思考」气泡 */
@@ -821,7 +908,7 @@ body.is-floating-collapsed #empty-state {
   justify-content: space-between;
   gap: 8px;
   padding: 5px 9px;
-  border-bottom: 1px solid #2a3348;
+  border-bottom: 1px solid var(--chat-context-border);
 }
 
 .chat-journal-title {
@@ -845,8 +932,8 @@ body.is-floating-collapsed #empty-state {
   margin-right: 6px;
   padding: 1px 6px;
   border-radius: 999px;
-  background: #1f2940;
-  color: #9fb2d6;
+  background: var(--chip-bg);
+  color: var(--chip-text);
   font-size: 10.5px;
   white-space: nowrap;
 }
@@ -858,9 +945,9 @@ body.is-floating-collapsed #empty-state {
   gap: 3px;
   margin: 8px 10px 0;
   padding: 7px 9px;
-  border: 1px solid #2b3448;
+  border: 1px solid var(--chat-editops-border);
   border-radius: 7px;
-  background: #141926;
+  background: var(--chat-editops-bg);
 }
 
 .chat-edit-row {
@@ -876,7 +963,7 @@ body.is-floating-collapsed #empty-state {
   flex: none;
   padding: 1px 5px;
   border-radius: 4px;
-  background: #222a3d;
+  background: var(--chat-editop-bg);
   color: var(--text-dim);
   font-size: 10.5px;
 }
@@ -899,7 +986,7 @@ body.is-floating-collapsed #empty-state {
 }
 
 .chat-edit-row.is-done .chat-edit-old {
-  color: #cfd8ea;
+  color: var(--text-soft);
 }
 
 .chat-edit-new {
@@ -919,7 +1006,7 @@ body.is-floating-collapsed #empty-state {
 /* 写入前的预览：会新增几条、改几处、哪几条重复被跳过 */
 .chat-journal-preview {
   padding: 7px 10px 0;
-  color: #9fb2d6;
+  color: var(--chip-text);
   font-size: 11.5px;
   line-height: 1.5;
 }
@@ -1003,7 +1090,7 @@ body.is-floating-collapsed #empty-state {
 }
 
 .chat-note-status.warn {
-  color: #ffb3c0;
+  color: var(--danger-text);
 }
 
 .btn.tiny {
@@ -1021,7 +1108,7 @@ body.is-floating-collapsed #empty-state {
   padding: 8px 10px;
   border: 1px solid var(--border);
   border-radius: 8px;
-  background: #10121a;
+  background: var(--code-bg);
   color: var(--text);
   font: inherit;
   font-size: 13px;
@@ -1075,7 +1162,7 @@ body.is-floating-collapsed #empty-state {
   inset: 0;
   display: grid;
   place-items: center;
-  background: #0b0d12cc;
+  background: var(--overlay-bg);
   backdrop-filter: blur(2px);
   z-index: 20;
 }
@@ -1089,7 +1176,7 @@ body.is-floating-collapsed #empty-state {
   border: 1px solid var(--border);
   border-radius: 12px;
   background: var(--bg-elevated);
-  box-shadow: 0 18px 50px #0009;
+  box-shadow: 0 18px 50px var(--shadow-strong);
 }
 
 .modal-head {
@@ -1128,7 +1215,7 @@ body.is-floating-collapsed #empty-state {
   padding: 7px 10px;
   border: 1px solid var(--border);
   border-radius: 7px;
-  background: #10121a;
+  background: var(--code-bg);
   color: var(--text);
   font: inherit;
   font-size: 13px;
@@ -1155,8 +1242,8 @@ body.is-floating-collapsed #empty-state {
   padding: 9px 10px;
   border: 1px solid var(--border);
   border-radius: 7px;
-  background: #10121a;
-  color: #c8cede;
+  background: var(--code-bg);
+  color: var(--code-text);
   font-family: Consolas, "Cascadia Mono", monospace;
   font-size: 11.5px;
   line-height: 1.6;
@@ -1179,7 +1266,7 @@ body.is-floating-collapsed #empty-state {
 }
 
 .modal-status.warn {
-  color: #ffb3c0;
+  color: var(--danger-text);
 }
 
 .hint {
@@ -1248,8 +1335,8 @@ body.is-floating-collapsed #empty-state {
   padding: 10px 14px;
   border: 1px solid #6b2734;
   border-radius: 8px;
-  background: #2a161c;
-  color: #ffb3c0;
+  background: var(--danger-bg);
+  color: var(--danger-text);
   font-size: 13px;
 }
 
@@ -1312,7 +1399,7 @@ body.is-floating-collapsed #empty-state {
   padding: 12px 14px;
   border: 1px solid var(--border);
   border-radius: 8px;
-  background: #10121a;
+  background: var(--code-bg);
   overflow-x: auto;
 }
 
@@ -1380,10 +1467,10 @@ body.is-floating-collapsed #empty-state {
 /* [!] 优先：更粗的左条 + 淡色背景把它独立出来 */
 .bujo-entry.is-priority {
   border-left: 5px solid var(--kind-priority);
-  background: #e0af680d;
+  background: var(--priority-bg);
 }
 .bujo-entry.is-priority:hover {
-  background: #e0af681a;
+  background: var(--priority-bg-hover);
 }
 .bujo-acts {
   flex: none;
@@ -1403,7 +1490,7 @@ body.is-floating-collapsed #empty-state {
   padding: 1px 6px;
   border: 1px solid var(--border);
   border-radius: 5px;
-  background: #1b1e27;
+  background: var(--bg-elevated);
   color: var(--text-dim);
   font: inherit;
   font-size: 11px;
@@ -1413,7 +1500,7 @@ body.is-floating-collapsed #empty-state {
 }
 
 .bujo-act:hover:not(:disabled) {
-  border-color: #3d4459;
+  border-color: var(--act-hover-border);
   background: var(--bg-hover);
   color: var(--text);
 }
@@ -1463,11 +1550,11 @@ body.is-floating-collapsed #empty-state {
 .bujo-entry.is-done .bujo-text {
   color: var(--text-dim);
   text-decoration: line-through;
-  text-decoration-color: #6dbf8b88;
+  text-decoration-color: var(--done-deco);
 }
 
 .bujo-entry.is-cancelled {
-  border-left-color: #3d4353;
+  border-left-color: var(--cancelled-border);
 }
 .bujo-entry.is-cancelled .bujo-glyph {
   color: var(--kind-cancelled);
@@ -1475,15 +1562,15 @@ body.is-floating-collapsed #empty-state {
 
 /* 划去：条目留在文件里，只是划掉；底色更暗，视觉上独立成「不再做」的一区 */
 .bujo-entry.is-cancelled .bujo-text {
-  color: #6b7280;
+  color: var(--cancelled-text);
   text-decoration: line-through;
-  text-decoration-color: #8d94a8aa;
+  text-decoration-color: var(--cancelled-deco);
 }
 .bujo-entry.is-cancelled {
-  background: #12141bcc;
+  background: var(--cancelled-bg);
 }
 .bujo-entry.is-cancelled:hover {
-  background: #171a24;
+  background: var(--cancelled-bg-hover);
 }
 
 .bujo-entry.is-migrated {
@@ -1520,7 +1607,7 @@ body.is-floating-collapsed #empty-state {
 }
 
 .bujo-entry.is-note {
-  border-left-color: #3a4054;
+  border-left-color: var(--note-border);
 }
 .bujo-entry.is-note .bujo-glyph {
   color: var(--kind-note);
@@ -1538,7 +1625,7 @@ body.is-floating-collapsed #empty-state {
   border: 1px solid var(--border);
   border-left: 3px solid var(--kind-done);
   border-radius: 7px;
-  background: #1b1e27f2;
+  background: var(--stamp-bg);
   color: var(--text);
   font-size: 12px;
   line-height: 1.5;
@@ -1561,8 +1648,8 @@ body.is-floating-collapsed #empty-state {
   padding: 16px 18px;
   border: 1px solid var(--border);
   border-radius: 8px;
-  background: #10121a;
-  color: #c8cede;
+  background: var(--code-bg);
+  color: var(--code-text);
   font-family: Consolas, "Cascadia Mono", monospace;
   font-size: 13px;
   line-height: 1.65;
@@ -1607,7 +1694,7 @@ body.is-floating-collapsed #empty-state {
 }
 
 .empty-legend code {
-  color: #c8cede;
+  color: var(--code-text);
   font-family: Consolas, monospace;
   font-size: 12px;
 }
@@ -1633,7 +1720,7 @@ body.is-floating-collapsed #empty-state {
 }
 
 .legend code {
-  color: #c8cede;
+  color: var(--code-text);
   font-family: Consolas, monospace;
 }
 
@@ -1648,7 +1735,7 @@ body.is-floating-collapsed #empty-state {
   inset: 0;
   display: grid;
   place-items: center;
-  background: #0b0d12cc;
+  background: var(--overlay-bg);
   backdrop-filter: blur(2px);
   pointer-events: none;
 }

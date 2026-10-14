@@ -64,6 +64,9 @@ contextBridge.exposeInMainWorld('bujo', {
   /** 保存设置；patch.apiKey 为空字符串表示不改动密钥 */
   saveSettings: (patch) => ipcRenderer.invoke('settings:save', patch),
 
+  /** 界面主题列表：styles/ 文件夹里的 每个 .css（除 base.css 布局基底）→ [{ id, label }] */
+  listThemes: () => ipcRenderer.invoke('themes:list'),
+
   /** 清除已保存的 API Key */
   clearApiKey: () => ipcRenderer.invoke('settings:clear-key'),
 
@@ -101,5 +104,12 @@ contextBridge.exposeInMainWorld('bujo', {
    * 手工改一条条目的标记：mark 为 ' '（待办）/ 'x'（完成）/ '-'（划去，原文保留）。
    * line 是条目在文件里的行号，text 是它的正文（行号失效时按内容找回）。
    */
-  setBulletMark: (target) => ipcRenderer.invoke('note:set-mark', target)
+  setBulletMark: (target) => ipcRenderer.invoke('note:set-mark', target),
+
+  /**
+   * 迁移 / 推迟一条条目（跟 setBulletMark 归入同一套行号+内容校验）。payload：
+   *   { filePath, line, text, destination }，destination 为
+   *   'tomorrow'（推迟到明天，原文标 [<]）/'nextMonth'（迁移到下月月度记录，标 [>]）/'future'（迁移到未来记录，标 [>]）
+   */
+  moveBullet: (target) => ipcRenderer.invoke('note:move', target)
 });
