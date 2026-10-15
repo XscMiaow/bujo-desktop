@@ -275,3 +275,25 @@ test('真实 journals 目录已是 年/月 嵌套结构', async () => {
   assert.ok(!files.some((f) => f.folder === ''), '旧平铺日记应已迁走');
   assert.ok(!files.some((f) => f.name.toLowerCase() === 'readme.md'), 'README 是说明文档，不该混进日记列表');
 });
+
+test('自定义集子：顶层非年份文件夹 → collection；年份文件夹与根级 → null；集子排到年份之后', async () => {
+  await fs.mkdir(path.join(tmpDir, '收件箱'), { recursive: true });
+  await fs.mkdir(path.join(tmpDir, '2020', '2020-05'), { recursive: true });
+  await fs.writeFile(path.join(tmpDir, '收件箱', '存货.md'), '# 存货\n', 'utf8');
+  await fs.writeFile(path.join(tmpDir, '收件箱', '旧件.md'), '# 旧\n', 'utf8');
+  // 同一组文件的 mtime 粒度太细会重合：显式设时间让「新→旧」可比
+  await fs.utimes(path.join(tmpDir, '收件箱', '存货.md'), new Date(2026, 0, 2), new Date(2026, 0, 2));
+  await fs.utimes(path.join(tmpDir, '收件箱', '旧件.md'), new Date(2026, 0, 1), new Date(2026, 0, 1));
+  await fs.writeFile(path.join(tmpDir, '2020', '2020-05', '2020-05-01.md'), '# 日\n', 'utf8');
+
+  const { files } = await listJournals(path.join(tmpDir));
+  const byName = (name) => files.find((f) => f.name === name);
+  assert.equal(byName('存货.md').collection, '收件箱', '集子文件夹里的文件带上 collection');
+  assert.equal(byName('旧件.md').collection, '收件箱');
+  assert.equal(byName('2020-05-01.md').collection, null, '年/月文件夹的文件不属于集子');
+
+  // 排序：年份（2020）在前，集子按名字垫底；同一集子内修改时间新→旧
+  const labels = files.map((f) => f.name);
+  assert.ok(labels.indexOf('2020-05-01.md') < labels.indexOf('存货.md'), '年份日记永远排在集子前');
+  assert.ok(labels.indexOf('旧件.md') > labels.indexOf('存货.md'), '同集子内修改时间新→旧（旧件后写但内容同名）');
+});

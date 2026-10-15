@@ -24,6 +24,17 @@ const IGNORED_NAMES = new Set(['readme.md']);
 
 const DAY_RE = /^\d{4}-\d{2}-\d{2}$/;
 const MONTH_RE = /^\d{4}-\d{2}$/;
+const YEAR_RE = /^\d{4}$/;
+
+/**
+ * 自定义集子（journals 下的自建文件夹，不叫年份的都算，例如 journals/读书笔记/）。
+ * 一个集子自带分组，在侧边栏里跟「年」并列展示；年/月文件夹里的文件不属于集子。
+ */
+function collectionOf(relativeFolder) {
+  const firstSegment = String(relativeFolder || '').split('/')[0];
+  if (!relativeFolder || !firstSegment || YEAR_RE.test(firstSegment)) return null; // 年文件夹（或根级）不是集子
+  return firstSegment;
+}
 
 /**
  * 新目录结构（2026-10 起采用，目录里用一次性迁移过渡）：
@@ -135,10 +146,12 @@ async function listJournals(dir) {
 
       const stat = await fs.stat(fullPath);
       const { year, month } = locationFrom(relative, entry.name);
+      const collection = collectionOf(relative);
       files.push({
         name: entry.name,
         path: fullPath,
         folder: relative,
+        collection,
         role: roleOf(entry.name),
         dateKey: dateKeyOf(entry.name),
         year,
@@ -161,11 +174,19 @@ async function listJournals(dir) {
   return { dir: resolved, files };
 }
 
-/** 侧边栏排序：年的历史在前 → 月在前 → 角色（未来/月度/每日/散件）→ 日期新的在前面 */
+/** 侧边栏排序：集子（按文件夹名）→ 年的历史在前 → 月在前 → 角色（未来/月度/每日/散件）→ 日期新的在前面 */
 const ROLE_RANK = { future: 0, monthly: 1, daily: 2, other: 3 };
 
 function sortJournals(files) {
   files.sort((a, b) => {
+    // 集子统一排在 年/月 日记的后面：先按集子名分组，组内修改时间新→旧
+    if (a.collection && b.collection) {
+      if (a.collection !== b.collection) return a.collection.localeCompare(b.collection);
+      return b.modifiedAt.localeCompare(a.modifiedAt) || b.name.localeCompare(a.name);
+    }
+    if (a.collection) return 1; // a 在集子里，b 不在：b 永远在前
+    if (b.collection) return -1;
+    // —— 以下与原排序一致 ——
     if (a.year !== b.year) {
       if (a.year == null) return 1; // 没年份的永远垫底
       if (b.year == null) return -1;

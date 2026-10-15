@@ -178,3 +178,15 @@ test('悬浮窗 bounds：合法存取，非法值丢弃，没存过返回 null',
   const onDisk = JSON.parse(fs.readFileSync(path.join(tmpDir, 'bounds.json'), 'utf8'));
   assert.deepEqual(onDisk.floatingBounds, { x: 120, y: 80, width: 360, height: 560 });
 });
+
+test('界面语言 locale：合法 BCP-47 id 保存，非法不覆盖，默认 zh-CN', () => {
+  const service = makeService(fakeEncryptor, 'locale.json');
+  service.save({ apiKey: 'sk-locale-0001' });
+  assert.equal(service.getPublic().locale, 'zh-CN', '没存过时默认中文');
+  assert.equal(service.save({ locale: 'en' }).settings.locale, 'en');
+  assert.equal(service.save({ locale: 'pt-BR' }).settings.locale, 'pt-BR');
+  assert.equal(service.save({ locale: 'Has Space' }).settings.locale, 'pt-BR', '非法不覆盖');
+  assert.equal(service.save({ locale: '../zh-CN' }).settings.locale, 'pt-BR', '路径注入不生效');
+  const onDisk = JSON.parse(fs.readFileSync(path.join(tmpDir, 'locale.json'), 'utf8'));
+  assert.equal(onDisk.locale, 'pt-BR');
+});

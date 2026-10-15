@@ -4,6 +4,7 @@ const { app, BrowserWindow, ipcMain, dialog, shell, safeStorage, Menu } = requir
 const path = require('node:path');
 const http = require('node:http');
 const os = require('node:os');
+const fs = require('node:fs');
 const { readMarkdownFile, MARKDOWN_EXTENSIONS } = require('./file-service');
 const {
   listJournals,
@@ -17,9 +18,14 @@ const {
 const { appendToNote, readNote, integrateNoteFile, setBulletMark, moveBullet, isInsideDirectory } = require('./note-service');
 const { SettingsService, DEFAULT_SETTINGS, LEGACY_SYSTEM_PROMPTS } = require('./settings-service');
 const { listThemes, isValidThemeId } = require('./theme-service');
+const { listPlugins } = require('./plugin-service');
 
 /** 主题文件夹：跟页面放一起，里面的每个 .css（除 base.css 布局基底）都是可选主题 */
 const STYLES_DIR = path.join(__dirname, '..', 'renderer', 'styles');
+/** 语言文件夹：每个 .js（除 i18n.js 助手）都是一种语言（zh-CN / en…） */
+const LOCALES_DIR = path.join(__dirname, '..', 'renderer', 'locales');
+/** 插件文件夹：项目根下的 plugins/，每个子文件夹（带 plugin.json）是一个插件 */
+const PLUGINS_DIR = path.join(app.getAppPath(), 'plugins');
 const DEFAULT_THEME = 'dark';
 const { streamChat } = require('./chat-service');
 const { buildSystemPrompt } = require('../shared/ai-reply.js');
@@ -55,6 +61,29 @@ function journalsDir() {
 
 /** 设置存储在用户目录，不进项目；密钥交给系统钥匙串加密 */
 let settings = null;
+/** 语言列表：locales/*.js 除 i18n.js 外都是语言；内置两个的中文/英文名写死，其它的按 id 展示 */
+const LOCALE_ID_RE = /^[a-z]{2,3}(-[A-Za-z0-9]{2,8}){0,2}$/;
+const LOCALE_LABELS = { 'zh-CN': '中文', en: 'English' };
+function listLocales(dir) {
+  try {
+    return fs
+      .readdirSync(dir, { withFileTypes: true })
+      .filter((entry) => entry.isFile() && entry.name.endsWith('.js') && entry.name !== 'i18n.js')
+      .map((entry) => {
+        const id = entry.name.slice(0, -3);
+        if (!LOCALE_ID_RE.test(id)) return null;
+        return { id, label: LOCALE_LABELS[id] || id };
+      })
+      .filter(Boolean)
+      .sort((a, b) => {
+        const rank = { 'zh-CN': 0, en: 1 };
+        return (rank[a.id] ?? 99) - (rank[b.id] ?? 99) || a.id.localeCompare(b.id);
+      });
+  } catch {
+    return []; // 目录读不到就空列表：界面保持默认中文
+  }
+}
+
 function getSettings() {
   if (!settings) {
     settings = new SettingsService({
@@ -378,14 +407,30 @@ function registerIpcHandlers() {
 
   // ---------------- 设置（API Key 只在主进程，不进渲染层） ----------------
 
-  ipcMain.handle('settings:get', () => getSettings().getPublic());
-
-  // 主题列表：styles 文件夹里的 每个 .css（除 base.css 布局基底）都是一个可选主题
+  ipcMain.handle('settings:get', () => getSettings().getPublic());  // 主题列表：styles 文件夹里的每个 .css（除 base.css 布局基底）都是一个可选主题
   ipcMain.handle('themes:list', () => {
     try {
       return { ok: true, ...listThemes(STYLES_DIR) };
     } catch (err) {
       return { ok: false, error: err.message, dir: STYLES_DIR, themes: [] };
+    }
+  });
+
+  // 语言列表：locales 文件夹里的每个 .js（除 i18n.js 助手）都是一种语言
+  ipcMain.handle('locales:list', () => {
+    try {
+      return { ok: true, dir: LOCALES_DIR, locales: listLocales(LOCALES_DIR) };
+    } catch (err) {
+      return { ok: false, error: err.message, dir: LOCALES_DIR, locales: [] };
+    }
+  });
+
+  // 插件列表：plugins/ 文件夹里的每个带 plugin.json 的子文件夹是一个插件
+  ipcMain.handle('plugins:list', () => {
+    try {
+      return { ok: true, ...listPlugins(PLUGINS_DIR) };
+    } catch (err) {
+      return { ok: false, error: err.message, dir: PLUGINS_DIR, plugins: [], errors: [] };
     }
   });
 
@@ -795,6 +840,11 @@ async function runSmokeTest(win) {
     const todayPath = dailyJournalPath(journalsDir(), new Date());
     fs.mkdirSync(path.dirname(todayPath), { recursive: true });
     fs.writeFileSync(todayPath, `# ${new Date().toISOString().slice(0, 10)}（自检）\n\n- [ ] 自检侧边栏示例\n`, 'utf8');
+
+    // 顺带预置一个自定义集子（读书笔记）：集子分组、集子里的条目与插件自定义子弹都要过自检
+    const collectionDir = path.join(journalsDir(), '读书笔记');
+    fs.mkdirSync(collectionDir, { recursive: true });
+    fs.writeFileSync(path.join(collectionDir, '读书笔记.md'), '# 读书笔记\n\n- [ ] 读《第一性原理》\n- [p] 正在读《深入理解ES6》\n', 'utf8');
 
     // 打开文件前的画面，用来证明截图确实是新的，而不是上一帧
     const beforeFrame = await captureFrame(win);

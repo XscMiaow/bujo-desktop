@@ -4,8 +4,24 @@
 
 const Bujo = window.BulletJournal;
 const marked = window.marked;
+const I18n = window.I18n;
 
 marked.setOptions({ gfm: true, breaks: false });
+
+/** 取词捷径；kindLabel 用「kind.<id>」键，插件的自定义类型回落到 plugin.label */
+function t(key, params) {
+  return I18n.t(key, params);
+}
+
+function kindLabel(key, meta) {
+  const translated = t(`kind.${key}`);
+  if (translated !== `kind.${key}`) return translated;
+  return (meta && meta.label) || key;
+}
+
+function kindClassVar(kind) {
+  return `var(--kind-${kind})`;
+}
 
 const els = {
   openBtn: document.getElementById('open-btn'),
@@ -48,32 +64,34 @@ const state = {
 
 function renderLegend() {
   const kinds = Bujo.KINDS;
-  const order = ['task', 'done', 'cancelled', 'migrated', 'scheduled', 'priority', 'note', 'event'];
+  // 内置八大类在前，插件自定义类型按注册顺序跟上
+  const order = ['task', 'done', 'cancelled', 'migrated', 'scheduled', 'priority', 'note', 'event']
+    .concat(Object.keys(kinds).filter((key) => !['task', 'done', 'cancelled', 'migrated', 'scheduled', 'priority', 'note', 'event'].includes(key)));
 
   els.legend.innerHTML = order
     .map((key) => {
       const meta = kinds[key];
-      return `<span><span class="glyph" style="color:var(--kind-${key})">${meta.glyph}</span>${meta.label} <code>${escapeHtml(meta.symbol)}</code></span>`;
+      return `<span><span class="glyph" style="color:${kindClassVar(key)}">${meta.glyph}</span>${kindLabel(key, meta)} <code>${escapeHtml(meta.symbol)}</code></span>`;
     })
     .join('');
 
   els.emptyLegend.innerHTML = order
     .map((key) => {
       const meta = kinds[key];
-      return `<li><span class="glyph" style="color:var(--kind-${key})">${meta.glyph}</span>${meta.label}<code>${escapeHtml(meta.symbol)}</code></li>`;
+      return `<li><span class="glyph" style="color:${kindClassVar(key)}">${meta.glyph}</span>${kindLabel(key, meta)}<code>${escapeHtml(meta.symbol)}</code></li>`;
     })
     .join('');
 }
 
 function renderFileMeta() {
   if (!state.file) {
-    els.fileMeta.textContent = '尚未打开文件 —— 点击「打开 .md 文件」，或把 .md 拖进窗口';
+    els.fileMeta.textContent = t('fileMeta.none');
     return;
   }
   const { name, dir, size, modifiedAt } = state.file;
   const kb = (size / 1024).toFixed(1);
   const time = new Date(modifiedAt).toLocaleString('zh-CN', { hour12: false });
-  els.fileMeta.innerHTML = `<strong>${escapeHtml(name)}</strong> · ${escapeHtml(dir)} · ${kb} KB · 修改于 ${time}`;
+  els.fileMeta.innerHTML = `<strong>${escapeHtml(name)}</strong> · ${escapeHtml(t('fileMeta.line', { dir: escapeHtml(dir), kb, time }))}`;
 }
 
 function renderStats(stats) {
@@ -82,21 +100,34 @@ function renderStats(stats) {
     return;
   }
   const chips = [];
-  if (stats.task) chips.push(`<span class="chip">待办 ${stats.task}</span>`);
-  if (stats.done) chips.push(`<span class="chip">完成 ${stats.done}</span>`);
-  if (stats.cancelled) chips.push(`<span class="chip">划去 ${stats.cancelled}</span>`);
-  if (stats.priority) chips.push(`<span class="chip">优先 ${stats.priority}</span>`);
-  if (stats.event) chips.push(`<span class="chip">事件 ${stats.event}</span>`);
-  if (stats.migrated) chips.push(`<span class="chip">迁移 ${stats.migrated}</span>`);
-  if (stats.note) chips.push(`<span class="chip">笔记 ${stats.note}</span>`);
+  const pushChip = (key, count) => {
+    if (count) chips.push(`<span class="chip">${escapeHtml(t('stats.chip', { label: t(`stats.${key}`), n: count }))}</span>`);
+  };
+  pushChip('task', stats.task);
+  pushChip('done', stats.done);
+  pushChip('cancelled', stats.cancelled);
+  pushChip('priority', stats.priority);
+  pushChip('event', stats.event);
+  pushChip('migrated', stats.migrated);
+  pushChip('note', stats.note);
+  // 插件的自定义类型：有计数就补一枚胶囊（标签用插件给的，不走 t()）
+  Bujo.getCustomBullets().forEach((bullet) => {
+    if (stats[bullet.kind]) chips.push(`<span class="chip">${escapeHtml(bullet.label)} ${stats[bullet.kind]}</span>`);
+  });
   chips.push(
-    `<span class="chip">进度 ${stats.progress}%</span><span class="progress"><span style="width:${stats.progress}%"></span></span>`
+    `<span class="chip">${escapeHtml(t('stats.progress', { n: stats.progress }))}</span><span class="progress"><span style="width:${stats.progress}%"></span></span>`
   );
   els.stats.innerHTML = chips.join('');
 }
 
-/** 能「完成」的条目类型 */
+/** 能「完成」的条目类型：内置四种 + 插件声明 taskLike 的自定义类型 */
 const TASK_LIKE = new Set(['task', 'priority', 'scheduled', 'migrated']);
+
+function isTaskLike(kind) {
+  if (TASK_LIKE.has(kind)) return true;
+  const meta = Bujo.KINDS[kind];
+  return Boolean(meta && meta.custom && meta.taskLike);
+}
 
 /** 条目右侧的一个小操作按钮 */
 function entryAction(act, label, title) {
@@ -125,51 +156,52 @@ function buildEntryActions(item) {
   acts.className = 'bujo-acts';
 
   if (item.kind === 'done') {
-    acts.append(entryAction('restore', '取消完成', '改回待办'));
+    acts.append(entryAction('restore', t('act.restore.done'), t('act.restore.done.title')));
   } else if (item.kind === 'cancelled') {
     const back = item.prior || 'task';
     const labelMeta = Bujo.KINDS[back] || Bujo.KINDS.task;
-    acts.append(entryAction('restore', `恢复为${labelMeta.label}`, `恢复为${labelMeta.label}（不是一律变回待办）`));
-  } else if (TASK_LIKE.has(item.kind)) {
-    acts.append(entryAction('done', '完成', '标记为已完成'));
+    const backLabel = kindLabel(back, labelMeta);
+    acts.append(entryAction('restore', t('act.restoreTo', { label: backLabel }), t('act.restoreTo.title', { label: backLabel })));
+  } else if (isTaskLike(item.kind)) {
+    acts.append(entryAction('done', t('act.done'), t('act.done.title')));
   }
 
   // 迁移/推迟的「回退」：这一行恢复为待办；已搬进目标日志的条目原地不动，
   // 它自己要再搬就等于「重新迁移旧项目」，不需要其他操作。
   // （已迁移的条目不能从原地再搬一次：先取消迁移，或者去目标日志搬那个副本）
   if (item.kind === 'migrated') {
-    acts.append(entryAction('restore', '取消迁移', '取消迁移：这一行恢复为待办；迁到目标日志的副本原地不动（继续迁它 = 重新迁移旧项目）'));
+    acts.append(entryAction('restore', t('act.unmigrate'), t('act.unmigrate.title')));
   } else if (item.kind === 'scheduled') {
-    acts.append(entryAction('restore', '取消推迟', '取消推迟：这一行恢复为待办；已写进明天日记的条目原地不动'));
+    acts.append(entryAction('restore', t('act.unschedule'), t('act.unschedule.title')));
   }
 
   // 优先开关：任意类型（含已完成/计划/迁移）都能 ★；划去态也保留原优先，可去可加
   acts.append(
     entryAction(
       'priority',
-      item.priority ? '去★' : '★',
-      item.priority ? '取消优先标记（其他标记不变）' : '标记为优先事项（叠加标记，随完成/划去一起保留）'
+      item.priority ? t('act.priority.remove') : t('act.priority.add'),
+      item.priority ? t('act.priority.removeTitle') : t('act.priority.addTitle')
     )
   );
 
   if (item.kind !== 'cancelled') {
-    acts.append(entryAction('cancel', '划去', '划去这一条（原文保留在笔记里；恢复时仍能回到原类型）'));
+    acts.append(entryAction('cancel', t('act.cancel'), t('act.cancel.title')));
   }
 
   // 迁移/推迟：待办、笔记、事件、已计划（[<]）的都能再搬；已完成/已划去/已迁移的不给
   //（已迁移的想再搬：先「取消迁移」，或去目标日志搬那个副本 = 重新迁移旧项目）
   if (!item.kind || ['task', 'note', 'event', 'scheduled'].includes(item.kind)) {
-    acts.append(entryAction('move', '»', '迁移或推迟这条：明天 / 下个月 / 未来记录（原文保留）'));
+    acts.append(entryAction('move', t('act.move'), t('act.move.title')));
   }
 
   return acts;
 }
 
-/** 迁移/推迟的目的地（与主进程 ensureMoveDestination 的 kind 对齐） */
+/** 迁移/推迟的目的地（与主进程 ensureMoveDestination 的 kind 对齐）；文案走 i18n */
 const MOVE_OPTIONS = [
-  { destination: 'tomorrow', label: '推迟到明天', hint: '写进明天的日记，这一行标为 [<]' },
-  { destination: 'nextMonth', label: '迁移到下个月', hint: '写进下个月的月度记录，这一行标为 [>]' },
-  { destination: 'future', label: '迁移到未来记录', hint: '写进年度（未来）记录，这一行标为 [>]' }
+  { destination: 'tomorrow', labelKey: 'move.tomorrow', hintKey: 'move.tomorrow.hint' },
+  { destination: 'nextMonth', labelKey: 'move.nextMonth', hintKey: 'move.nextMonth.hint' },
+  { destination: 'future', labelKey: 'move.future', hintKey: 'move.future.hint' }
 ];
 
 /** 关掉别的条目还开着的迁移菜单 */
@@ -193,7 +225,7 @@ function toggleMoveMenu(button) {
   menu.className = 'bujo-move-menu';
   menu.innerHTML = MOVE_OPTIONS.map(
     (option) =>
-      `<button type="button" class="bujo-move-option" data-move="${option.destination}" title="${escapeHtml(option.hint)}">${escapeHtml(option.label)}</button>`
+      `<button type="button" class="bujo-move-option" data-move="${option.destination}" title="${escapeHtml(t(option.hintKey))}">${escapeHtml(t(option.labelKey))}</button>`
   ).join('');
   entry.append(menu);
 }
@@ -219,13 +251,18 @@ async function applyMoveAction(entry, destination) {
     buttons.forEach((button) => {
       button.disabled = false;
     });
-    showError(`迁移失败：${(result && result.error) || '未知错误'}`);
+    showError(t('error.moveFailed', { error: (result && result.error) || t('error.prefix') }));
     return;
   }
 
   clearError();
-  const label = result.destinationKind === 'tomorrow' ? '已推迟到明天' : `已迁移到 ${(result && result.destName) || '目标日志'}`;
-  showToast(result.destChanged ? label : `这一条已经在${result.destinationKind === 'tomorrow' ? '明天的日记' : '目标日志'}里（没有重复加）`);
+  const movedLabel = result.destinationKind === 'tomorrow'
+    ? t('toast.movedToTomorrow')
+    : t('toast.movedTo', { name: (result && result.destName) || t('toast.target.default') });
+  const alreadyLabel = result.destinationKind === 'tomorrow'
+    ? t('toast.alreadyInTomorrow')
+    : t('toast.alreadyInTarget', { target: (result && result.destName) || t('toast.target.default') });
+  showToast(result.destChanged ? movedLabel : alreadyLabel);
 
   const scrollTop = els.content.scrollTop;
   await loadFile(state.file.path);
@@ -336,13 +373,13 @@ function journalLabel(fileName, role) {
   const base = String(fileName || '').replace(/\.[^.]+$/, '');
   const lib = window.JournalDate;
   const day = lib && lib.parseDateKey(base);
-  if (role === 'future') return { name: base, sub: '年度（未来）记录' };
+  if (role === 'future') return { name: base, sub: t('sidebar.futureRecord.note') };
   if (role === 'monthly') {
     const month = lib && lib.parseMonthKey(base);
-    return { name: '月度记录', sub: month ? lib.monthLabel(month) : '月度记录' };
+    return { name: t('sidebar.monthlyRecord'), sub: month ? lib.monthLabel(month) : t('sidebar.monthlyRecord') };
   }
   if (day) return { name: base, sub: lib.weekdayLabel(day) };
-  return { name: base, sub: '笔记' };
+  return { name: base, sub: t('journal.sub.note') };
 }
 
 function shortTime(iso) {
@@ -376,7 +413,7 @@ function journalRow({ label, path = '', pending = null, modifiedAt = null }) {
   if (path) li.dataset.path = path;
   if (pending) li.dataset.ensure = JSON.stringify(pending);
   li.tabIndex = 0;
-  li.title = path ? `${path}\n双击打开` : '还不存在，双击按模板新建';
+  li.title = path ? `${path}\n${t('sidebar.row.openHint')}` : t('sidebar.row.pendingHint');
   const sub = [label.sub, modifiedAt ? shortTime(modifiedAt) : null].filter(Boolean).join(' · ');
   li.innerHTML =
     `<span class="journal-name">${escapeHtml(label.name)}</span>` +
@@ -389,7 +426,7 @@ function renderJournalList() {
   els.sidebarEmpty.hidden = state.journals.length > 0;
   const lib = window.JournalDate;
 
-  const { years, strays } = groupJournals(state.journals);
+  const { years, strays, collections: collectionMap } = groupJournals(state.journals);
 
   [...years.values()]
     .sort((a, b) => Number(b.year) - Number(a.year))
@@ -397,16 +434,16 @@ function renderJournalList() {
       // 年文件夹标题
       const head = document.createElement('li');
       head.className = 'journal-group';
-      head.innerHTML = `<span class="journal-group-name">${escapeHtml(yearGroup.year)}</span><span class="journal-group-hint">年</span>`;
+      head.innerHTML = `<span class="journal-group-name">${escapeHtml(yearGroup.year)}</span><span class="journal-group-hint">${escapeHtml(t('sidebar.group.year'))}</span>`;
       els.journalList.append(head);
 
       // 年度（未来）记录：已有用真实文件，否则给一行「双击新建」
       if (yearGroup.future) {
         const file = yearGroup.future;
-        els.journalList.append(journalRow({ label: { name: lib.FUTURE_RECORD_FILE.replace(/\.md$/, '') || '未来记录', sub: `${yearGroup.year} 年 · 年度记录` }, path: file.path, modifiedAt: file.modifiedAt }));
+        els.journalList.append(journalRow({ label: { name: lib.FUTURE_RECORD_FILE.replace(/\.md$/, '') || t('sidebar.futureRecord'), sub: t('sidebar.futureRecord.sub', { year: yearGroup.year }) }, path: file.path, modifiedAt: file.modifiedAt }));
       } else {
         els.journalList.append(
-          journalRow({ label: { name: '未来记录', sub: `${yearGroup.year} 年 · 双击新建年度记录` }, pending: { kind: 'future', year: yearGroup.year } })
+          journalRow({ label: { name: t('sidebar.futureRecord'), sub: t('sidebar.futureRecord.pending', { year: yearGroup.year }) }, pending: { kind: 'future', year: yearGroup.year } })
         );
       }
 
@@ -427,10 +464,10 @@ function renderJournalList() {
 
           if (monthGroup.monthly) {
             const file = monthGroup.monthly;
-            els.journalList.append(journalRow({ label: { name: '月度记录', sub: monthDate ? lib.monthLabel(monthDate) : monthGroup.month }, path: file.path, modifiedAt: file.modifiedAt }));
+            els.journalList.append(journalRow({ label: { name: t('sidebar.monthlyRecord'), sub: monthDate ? lib.monthLabel(monthDate) : monthGroup.month }, path: file.path, modifiedAt: file.modifiedAt }));
           } else {
             els.journalList.append(
-              journalRow({ label: { name: '月度记录', sub: '双击新建月度记录' }, pending: { kind: 'monthly', month: monthGroup.month } })
+              journalRow({ label: { name: t('sidebar.monthlyRecord'), sub: t('sidebar.monthlyRecord.pending') }, pending: { kind: 'monthly', month: monthGroup.month } })
             );
           }
 
@@ -441,10 +478,23 @@ function renderJournalList() {
         });
     });
 
+  // 自定义集子：journals/ 下自己建的文件夹（不叫年份的）自成一组
+  [...collectionMap.entries()]
+    .sort((a, b) => a[0].localeCompare(b[0]))
+    .forEach(([name, files]) => {
+      const head = document.createElement('li');
+      head.className = 'journal-group collection';
+      head.innerHTML = `<span class="journal-group-name">${escapeHtml(name)}</span><span class="journal-group-hint">${escapeHtml(t('sidebar.group.collection'))}</span>`;
+      els.journalList.append(head);
+      files.forEach((file) => {
+        els.journalList.append(journalRow({ label: journalLabel(file.name, file.role), path: file.path, modifiedAt: file.modifiedAt }));
+      });
+    });
+
   if (strays.length) {
     const head = document.createElement('li');
     head.className = 'journal-group';
-    head.innerHTML = '<span class="journal-group-name">其他</span>';
+    head.innerHTML = `<span class="journal-group-name">${escapeHtml(t('sidebar.group.other'))}</span>`;
     els.journalList.append(head);
     strays.forEach((file) => {
       els.journalList.append(journalRow({ label: journalLabel(file.name, file.role), path: file.path, modifiedAt: file.modifiedAt }));
@@ -453,12 +503,20 @@ function renderJournalList() {
 
   markActiveJournal();
 
-  /** 把文件列表归成「年 → 月」两层组；认不出年份的归入末尾散件组 */
+  /** 把文件列表归成「年 → 月 + 自定义集子」；认不出年份且不在集子里的归入末尾散件组 */
   function groupJournals(files) {
     const years = new Map();
+    const collections = new Map();
     const strays = [];
 
     files.forEach((file) => {
+      if (file.collection) {
+        // 自定义集子：顶层自己建的文件夹（名字不是年份）
+        const group = collections.get(file.collection) || [];
+        group.push(file);
+        collections.set(file.collection, group);
+        return;
+      }
       if (!file.year) {
         strays.push(file);
         return;
@@ -480,14 +538,14 @@ function renderJournalList() {
       }
     });
 
-    return { years, strays };
+    return { years, strays, collections };
   }
 }
 
 async function refreshJournals() {
   const result = await window.bujo.listJournals();
   if (!result || !result.ok) {
-    showError(`读取日记目录失败：${(result && result.error) || '未知错误'}`);
+    showError(t('error.readJournals', { error: (result && result.error) || t('error.prefix') }));
     return;
   }
   state.journals = result.files;
@@ -542,14 +600,12 @@ function markForAction(entry, act) {
   }
   return null;
 }
-const STATE_LABELS = {
-  task: '待办',
-  done: '已完成',
-  cancelled: '已划去（原文保留）',
-  note: '笔记',
-  event: '事件',
-  priority: '优先事项'
-};
+/** 提示条里的状态名（i18n；插件类型用 plugin.label 兜底） */
+function stateLabel(kind) {
+  const translated = t(`state.${kind}`);
+  if (translated !== `state.${kind}`) return translated;
+  return (Bujo.KINDS[kind] && Bujo.KINDS[kind].label) || kind;
+}
 
 let toastTimer = null;
 
@@ -591,13 +647,13 @@ async function applyBulletAction(act) {
     buttons.forEach((button) => {
       button.disabled = false;
     });
-    showError(`改不了这一条：${(result && result.error) || '未知错误'}`);
+    showError(t('error.cannotChange', { error: (result && result.error) || t('error.prefix') }));
     return;
   }
 
   clearError();
-  const label = STATE_LABELS[result.state] || result.state;
-  showToast(result.changed ? `已标记为${label}` : `这一条已经是${label}`);
+  const label = stateLabel(result.state);
+  showToast(result.changed ? t('toast.marked', { label }) : t('toast.already', { label }));
 
   // 重新解析整篇：符号、统计、行号都跟着更新（保持滚动位置，别把视线顶回页首）
   const scrollTop = els.content.scrollTop;
@@ -608,7 +664,7 @@ async function applyBulletAction(act) {
 async function loadFile(filePath) {
   const result = await window.bujo.readFile(filePath);
   if (!result || !result.ok) {
-    showError(`打开失败：${(result && result.error) || '未知错误'}`);
+    showError(t('error.openFailed', { error: (result && result.error) || t('error.prefix') }));
     return { ok: false, error: result && result.error };
   }
   clearError();
@@ -618,7 +674,7 @@ async function loadFile(filePath) {
   state.blocks = parsed.blocks;
   state.stats = parsed.stats;
 
-  document.title = `${result.file.name} — 子弹笔记`;
+  document.title = t('app.docTitle', { name: result.file.name });
   renderAll();
   markActiveJournal();
   els.content.scrollTop = 0;
@@ -629,7 +685,7 @@ async function openViaDialog() {
   const result = await window.bujo.openFileDialog();
   if (!result) return null; // 用户取消
   if (!result.ok) {
-    showError(`打开失败：${result.error}`);
+    showError(t('error.openFailed', { error: result.error }));
     return null;
   }
   clearError();
@@ -637,7 +693,7 @@ async function openViaDialog() {
   const parsed = Bujo.parseDocument(result.file.content);
   state.blocks = parsed.blocks;
   state.stats = parsed.stats;
-  document.title = `${result.file.name} — 子弹笔记`;
+  document.title = t('app.docTitle', { name: result.file.name });
   renderAll();
   markActiveJournal();
   els.content.scrollTop = 0;
@@ -681,7 +737,7 @@ async function openJournalRow(li) {
     }
     const result = await window.bujo.ensureJournal(spec);
     if (!result || !result.ok) {
-      showError(`创建日记失败：${(result && result.error) || '未知错误'}`);
+      showError(t('error.createJournalFailed', { error: (result && result.error) || t('error.prefix') }));
       return;
     }
     clearError();
@@ -775,7 +831,7 @@ window.addEventListener('drop', async (event) => {
   if (!file) return;
   const filePath = window.bujo.getPathForFile(file);
   if (!filePath) {
-    showError('无法获取拖入文件的路径，请改用「打开 .md 文件」按钮');
+    showError(t('error.dropPath'));
     return;
   }
   await loadFile(filePath);
@@ -865,6 +921,52 @@ window.__bujoSmokeTest = async (filePath) => {
   const rendered = Boolean(afterSidebarOpen) && afterSidebarOpen.blocks > 0 && afterSidebarOpen.entries === afterSidebarOpen.stats.total;
   const ensureOk = !ensuredPending || (ensuredPending.opened && ensuredPending.listedAfterRefresh && ensuredPending.highlighted);
 
+  // 自定义集子：journals/<不是年份>/… 出现在侧边栏的集子分组里，双击可打开
+  const collectionGroups = [...document.querySelectorAll('.journal-group.collection')]
+    .map((el) => (el.querySelector('.journal-group-name') || {}).textContent)
+    .filter(Boolean);
+  const collectionLi = journalItems().find((li) => li.dataset.path && li.dataset.path.includes('读书笔记'));
+  let collection = { groups: collectionGroups, opened: null, customBullet: null, ok: collectionGroups.length > 0 && Boolean(collectionLi) };
+  if (collectionLi) {
+    collectionLi.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }));
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    const progressEntry = document.querySelector('.bujo-entry[data-kind="in-progress"]');
+    collection = {
+      groups: collectionGroups,
+      opened: state.file && state.file.name,
+      customBullet: progressEntry
+        ? { kind: progressEntry.dataset.kind, glyph: (progressEntry.querySelector('.bujo-glyph') || {}).textContent, inLegend: els.legend.textContent.includes('进行中') }
+        : null,
+      ok: true
+    };
+    collection.ok = Boolean(collection.opened) && Boolean(collection.customBullet) && collection.customBullet.inLegend;
+    // 回到最初的日记，免得改变后续自检步骤的前提
+    if (firstPath) await loadFile(firstPath);
+  }
+
+  // 界面语言：切到英文 → 工具栏真的变英文；切回中文原样恢复
+  let i18nCheck = { ok: false, reason: 'not-run' };
+  if (typeof I18n !== 'undefined') {
+    const openBtn = document.getElementById('open-btn');
+    const zhLabel = openBtn.textContent;
+    I18n.setLocale('en', { force: true });
+    I18n.applyStatic(document);
+    rerenderDynamicText();
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    const enLabel = openBtn.textContent;
+    const langOptions = document.getElementById('lang-select') ? document.getElementById('lang-select').options.length : 0;
+    I18n.setLocale('zh-CN', { force: true });
+    I18n.applyStatic(document);
+    rerenderDynamicText();
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    i18nCheck = {
+      ok: enLabel !== zhLabel && openBtn.textContent === zhLabel && langOptions >= 2,
+      zhLabel,
+      enLabel,
+      langOptions
+    };
+  }
+
   return {
     ok:
       before.entries > 0 &&
@@ -877,7 +979,9 @@ window.__bujoSmokeTest = async (filePath) => {
       collapsedWidth < expandedWidth &&
       listHidden &&
       refreshHiddenWhenCollapsed &&
-      refreshVisibleWhenExpanded,
+      refreshVisibleWhenExpanded &&
+      collection.ok &&
+      i18nCheck.ok,
     initial: before,
     sidebar: {
       dir: els.sidebarDir.textContent,
@@ -889,6 +993,8 @@ window.__bujoSmokeTest = async (filePath) => {
       activeHighlighted: Boolean(activePath),
       ensuredPending
     },
+    collection,
+    i18n: i18nCheck,
     afterSidebarOpen,
     collapse: { collapsedWidth, expandedWidth, listHidden, refreshHiddenWhenCollapsed, refreshVisibleWhenExpanded }
   };
@@ -948,7 +1054,7 @@ function applyFloatingMode() {
   const backBtn = bar.querySelector('#float-back');
   backBtn.addEventListener('click', async () => {
     const result = await window.bujo.toggleFloating();
-    if (result && !result.ok) showError(`回主窗口失败：${result.error}`);
+    if (result && !result.ok) showError(t('error.backMain', { error: result.error }));
   });
   backBtn.dataset.wired = 'toggle-floating'; // 自检用：有这个标记 = 监听器已接上（getEventListeners 不在页面环境）
 
@@ -1081,7 +1187,7 @@ async function showFloatingDaily() {
     floating.daily = { path: today.path, name: today.name };
     await loadFile(today.path);
   } else {
-    els.fileMeta.textContent = '今天的日记还没有 —— 回主窗口打开即可自动创建';
+    els.fileMeta.textContent = t('floating.daily.none');
   }
 }
 
@@ -1467,9 +1573,22 @@ window.__bujoSmokeTestMarks = async () => {
   };
 };
 
-/* ---------------- 界面主题（styles/ 文件夹里的 css 文件） ---------------- */
-
+/* ---------------- 界面主题（styles/）+ 语言（locales/）+ 插件（plugins/） ---------------- *
+ * 三个可选资源文件夹都在启动时接上：
+ *   styles/<id>.css  主题（theme-select 下拉）
+ *   locales/<id>.js  语言（lang-select 下拉；i18n.js 提供组装器）
+ *   plugins/<name>/  插件（plugin.json 清单里的自定义子弹注册进解析器）
+ */
 const DEFAULT_THEME = 'dark';
+
+/** 重画所有带动态文案的区域（切语言后调用；当前语言下保持与原来相同的内容感） */
+function rerenderDynamicText() {
+  renderLegend();
+  renderFileMeta();
+  if (state.stats) renderStats(state.stats);
+  renderJournalList();
+  if (state.file) document.title = t('app.docTitle', { name: state.file.name });
+}
 
 /** 把 <link id="theme-style"> 换到 styles/<id>.css（base.css 布局基底不动） */
 function applyTheme(id) {
@@ -1491,7 +1610,12 @@ async function initTheme() {
   } catch { /* 主进程还慢着：先不填下拉 */ }
   if (themes.length) {
     els.themeSelect.innerHTML = themes
-      .map((theme) => `<option value="${escapeHtml(theme.id)}">${escapeHtml(theme.label)}</option>`)
+      .map((theme) => {
+        // 内置主题的显示名走 i18n（深色/浅色 → Dark/Light），其它按文件夹名
+        const label = t(`settings.theme.${theme.id}`);
+        const display = label === `settings.theme.${theme.id}` ? theme.label : label;
+        return `<option value="${escapeHtml(theme.id)}">${escapeHtml(display)}</option>`;
+      })
       .join('');
     if (!themes.some((theme) => theme.id === DEFAULT_THEME)) {
       els.themeSelect.insertAdjacentHTML(
@@ -1525,10 +1649,86 @@ if (els.themeSelect) {
   });
 }
 
+/* ---------------- 界面语言（locales 文件夹） ---------------- */
+
+/** 语言下拉：locales/<id>.js 里必须有 I18N_<ID> 字典；切换即存设置并重画界面 */
+async function initLocales() {
+  const select = document.getElementById('lang-select');
+  if (!select || typeof I18n === 'undefined') return;
+
+  let locales = [];
+  try {
+    const res = await window.bujo.listLocales();
+    locales = ((res && res.locales) || []).filter((locale) => I18n.hasLocale(locale.id));
+  } catch { }
+  if (locales.length) {
+    select.innerHTML = locales
+      .map((locale) => `<option value="${escapeHtml(locale.id)}">${escapeHtml(locale.label)}</option>`)
+      .join('');
+  } else {
+    select.hidden = true;
+    return;
+  }
+
+  // 记住的语言：设置优先；没有设置先用电 memory
+  let remembered = I18n.getLocale();
+  try {
+    const settings = await window.bujo.getSettings();
+    if (settings && settings.locale && I18n.hasLocale(settings.locale) && locales.some((locale) => locale.id === settings.locale)) {
+      remembered = settings.locale;
+    }
+  } catch { }
+  if (I18n.hasLocale(remembered) && locales.some((locale) => locale.id === remembered)) applyLocale(remembered, { skipSave: true });
+
+  select.addEventListener('change', () => applyLocale(select.value));
+}
+
+/** 切语言：字典切换 → 静态文案 + 动态区域重画；设置里记住（skipSave 供启动时回放） */
+function applyLocale(id, options = {}) {
+  if (typeof I18n === 'undefined') return;
+  I18n.setLocale(id);
+  const select = document.getElementById('lang-select');
+  if (select && [...select.options].some((opt) => opt.value === I18n.getLocale())) select.value = I18n.getLocale();
+  rerenderDynamicText();
+  if (options.skipSave) return;
+  window.bujo.saveSettings({ locale: I18n.getLocale() }).catch(() => { });
+}
+
+/* ---------------- 插件（plugins 文件夹：自定义子弹） ---------------- */
+
+/** 拉插件清单 → 登记进解析器 → 写入颜色变量 → 图例/统计重画 */
+async function initPlugins() {
+  let plugins = [];
+  try {
+    const res = await window.bujo.listPlugins();
+    plugins = (res && res.plugins) || [];
+  } catch { }
+
+  const bullets = plugins.flatMap((plugin) => plugin.bullets || []);
+  if (!bullets.length) return;
+
+  const registered = Bujo.registerCustomBullets(bullets);
+  registered.forEach((bullet) => {
+    if (bullet.color) {
+      document.documentElement.style.setProperty(`--kind-${bullet.kind}`, bullet.color);
+    }
+  });
+}
+
 (async function init() {
+  // 静态界面文案先按当前语言填好（语言变化时 i18n 会再通知一次）
+  if (typeof I18n !== 'undefined') {
+    I18n.applyStatic(document);
+    I18n.onChange(() => I18n.applyStatic(document));
+  }
   renderLegend();
   renderAll();
   initTheme();
+  initLocales();
+  initPlugins().then(() => {
+    // 插件带来的自定义类型要重新画图例（新 kind 变成可统计/可显示的）
+    renderLegend();
+  });
 
   // 记住上次的折叠状态，但初始化时不要反过来写存储
   const remembered = (() => {
@@ -1550,7 +1750,7 @@ if (els.themeSelect) {
       toggle.hidden = false;
       toggle.addEventListener('click', async () => {
         const result = await window.bujo.toggleFloating();
-        if (result && !result.ok) showError(`切换悬浮小窗失败：${result.error}`);
+        if (result && !result.ok) showError(t('error.floatingToggle', { error: result.error }));
       });
     }
   }

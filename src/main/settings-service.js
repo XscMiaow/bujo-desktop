@@ -102,6 +102,8 @@ class SettingsService {
       temperature: typeof raw.temperature === 'number' ? raw.temperature : DEFAULT_SETTINGS.temperature,
       // 界面主题（styles/ 文件夹里那份 css 的 id）；坏值/conflict 都回落到默认深色
       theme: typeof raw.theme === 'string' && /^[a-z0-9-]{1,24}$/.test(raw.theme) ? raw.theme : 'dark',
+      // 界面语言（locales/ 文件夹里那份字典的 id）；坏值回落默认中文
+      locale: typeof raw.locale === 'string' && /^[a-z]{2,3}(-[A-Za-z0-9]{2,8}){0,2}$/.test(raw.locale) ? raw.locale : 'zh-CN',
       hasApiKey: Boolean(raw.apiKeyCipher || raw.apiKey),
       apiKeyHint: typeof raw.apiKeyHint === 'string' ? raw.apiKeyHint : null,
       encrypted: Boolean(raw.apiKeyCipher) && this.encryptor.isAvailable(),
@@ -155,6 +157,10 @@ class SettingsService {
     // 界面主题：只认短小写字母数字与连字符，别的不动
     if (typeof patch.theme === 'string' && /^[a-z0-9-]{1,24}$/.test(patch.theme)) {
       raw.theme = patch.theme;
+    }
+    // 界面语言：BCP-47 风格的短 id（zh-CN / en / pt-BR…）
+    if (typeof patch.locale === 'string' && /^[a-z]{2,3}(-[A-Za-z0-9]{2,8}){0,2}$/.test(patch.locale)) {
+      raw.locale = patch.locale;
     }
 
     // 悬浮小窗位置（bounds 才能完整恢复；只存数字，坏值直接忽略）

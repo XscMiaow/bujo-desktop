@@ -15,40 +15,41 @@
     <header class="toolbar">
       <div class="brand">
         <span class="brand-mark">•</span>
-        <span class="brand-name">子弹笔记</span>
+        <span class="brand-name" data-i18n="app.title">子弹笔记</span>
       </div>
 
       <div class="toolbar-actions">
-        <button id="open-btn" class="btn primary" type="button">打开 .md 文件</button>
-        <button id="reload-btn" class="btn" type="button" disabled>重新载入</button>
+        <button id="open-btn" class="btn primary" type="button" data-i18n="toolbar.open">打开 .md 文件</button>
+        <button id="reload-btn" class="btn" type="button" disabled data-i18n="toolbar.reload">重新载入</button>
         <div class="segmented" role="group" aria-label="显示模式">
-          <button id="view-preview" class="seg active" type="button">预览</button>
-          <button id="view-source" class="seg" type="button">原文</button>
+          <button id="view-preview" class="seg active" type="button" data-i18n="view.preview">预览</button>
+          <button id="view-source" class="seg" type="button" data-i18n="view.source">原文</button>
         </div>
-        <button id="chat-toggle" class="btn" type="button" title="AI 聊天（Ctrl/Cmd + J）">AI 聊天</button>
-        <button id="floating-toggle" class="btn" type="button" title="切换到悬浮小窗：显示当天笔记要点与精简聊天">悬浮小窗</button>
-        <select id="theme-select" class="btn" title="界面主题（浅色/深色等）" aria-label="界面主题"></select>
-        <button id="settings-open" class="icon-btn" type="button" title="AI 设置" aria-label="AI 设置">⚙</button>
+        <button id="chat-toggle" class="btn" type="button" data-i18n="toolbar.chat" data-i18n-title="toolbar.chatToggle.title">AI 聊天</button>
+        <button id="floating-toggle" class="btn" type="button" data-i18n="toolbar.floating" data-i18n-title="toolbar.floating.title">悬浮小窗</button>
+        <select id="theme-select" class="btn" data-i18n-title="toolbar.theme.title" aria-label="界面主题"></select>
+        <select id="lang-select" class="btn" data-i18n-title="toolbar.language.title" aria-label="界面语言"></select>
+        <button id="settings-open" class="icon-btn" type="button" data-i18n-title="toolbar.settings.title" data-i18n-aria="toolbar.settings.label" aria-label="AI 设置">⚙</button>
       </div>
     </header>
 
     <div class="workspace">
       <aside class="sidebar" id="sidebar" aria-label="日记列表">
         <div class="sidebar-head">
-          <button id="sidebar-toggle" class="icon-btn" type="button" title="收起日记栏" aria-label="收起或展开日记栏">‹</button>
-          <span class="sidebar-title">日记</span>
-          <button id="sidebar-refresh" class="icon-btn" type="button" title="刷新列表" aria-label="刷新日记列表">↻</button>
+          <button id="sidebar-toggle" class="icon-btn" type="button" data-i18n-title="sidebar.toggle.collapse" aria-label="收起或展开日记栏">‹</button>
+          <span class="sidebar-title" data-i18n="sidebar.title">日记</span>
+          <button id="sidebar-refresh" class="icon-btn" type="button" data-i18n-title="sidebar.refresh.title" aria-label="刷新日记列表">↻</button>
         </div>
         <div class="sidebar-dir" id="sidebar-dir" title=""></div>
         <ul class="journal-list" id="journal-list"></ul>
-        <div class="sidebar-empty" id="sidebar-empty" hidden>
+        <div class="sidebar-empty" id="sidebar-empty" hidden data-i18n="sidebar.empty">
           还没有日记 —— 把 .md 文件放进日记目录，或点「刷新列表」
         </div>
       </aside>
 
       <section class="main-col">
         <div class="file-bar" id="file-bar">
-          <div class="file-meta" id="file-meta">尚未打开文件 —— 点击「打开 .md 文件」，或把 .md 拖进窗口</div>
+          <div class="file-meta" id="file-meta" data-i18n="fileMeta.none">尚未打开文件 —— 点击「打开 .md 文件」，或把 .md 拖进窗口</div>
           <div class="stats" id="stats"></div>
         </div>
 
@@ -56,10 +57,10 @@
 
         <main id="content" class="content drop-target">
           <section class="empty-state" id="empty-state">
-            <h1>从一份 Markdown 笔记开始</h1>
-            <p>左侧双击任意一篇日记即可打开；也支持子弹笔记语法，按符号分类显示：</p>
+            <h1 data-i18n="empty.title">从一份 Markdown 笔记开始</h1>
+            <p data-i18n="empty.subtitle">左侧双击任意一篇日记即可打开；也支持子弹笔记语法，按符号分类显示：</p>
             <ul class="empty-legend" id="empty-legend"></ul>
-            <p class="hint">快捷键 Ctrl/Cmd + O 打开文件</p>
+            <p class="hint" data-i18n="empty.shortcut.hint">快捷键 Ctrl/Cmd + O 打开文件</p>
           </section>
           <article id="note" class="note" hidden></article>
         </main>
@@ -67,16 +68,16 @@
 
       <aside class="chat-panel" id="chat-panel" aria-label="AI 聊天" hidden>
         <div class="chat-head">
-          <span class="chat-title">AI 聊天</span>
+          <span class="chat-title" data-i18n="chat.title">AI 聊天</span>
           <span class="chat-status" id="chat-status"></span>
-          <button id="chat-new" class="icon-btn" type="button" title="新建对话（AI 忘掉之前的聊天，只保留记录）" aria-label="新建对话">＋</button>
-          <button id="chat-clear-screen" class="icon-btn" type="button" title="清屏（只清这扇窗口，上下文还继续）" aria-label="清屏">⌫</button>
-          <button id="chat-settings" class="icon-btn" type="button" title="AI 设置" aria-label="AI 设置">⚙</button>
-          <button id="chat-close" class="icon-btn" type="button" title="收起聊天" aria-label="收起聊天">✕</button>
+          <button id="chat-new" class="icon-btn" type="button" data-i18n-title="chat.new.title" aria-label="新建对话">＋</button>
+          <button id="chat-clear-screen" class="icon-btn" type="button" data-i18n-title="chat.clear.title" aria-label="清屏">⌫</button>
+          <button id="chat-settings" class="icon-btn" type="button" data-i18n-title="toolbar.settings.title" data-i18n-aria="toolbar.settings.label" aria-label="AI 设置">⚙</button>
+          <button id="chat-close" class="icon-btn" type="button" data-i18n-title="chat.close.title" aria-label="收起聊天">✕</button>
         </div>
 
         <ul class="chat-messages" id="chat-messages"></ul>
-        <div class="chat-empty" id="chat-empty">
+        <div class="chat-empty" id="chat-empty" data-i18n-html="chat.empty">
           聊聊今天要做的事。AI 会分别给出「对话」和「笔记草稿」：草稿里是要新增的条目，
           以及要改动已有条目的地方；与笔记里重复的内容不会再写一遍。<br />
           下面选「参考」哪一篇笔记，AI 就能看到它已经记过什么。<br />
@@ -85,26 +86,26 @@
 
         <form class="chat-composer" id="chat-form">
           <div class="chat-input-row">
-            <textarea id="chat-input" rows="3" placeholder="问点什么…（Enter 发送，Shift + Enter 换行）"></textarea>
-            <button id="chat-send" class="btn primary chat-send" type="submit">发送</button>
+            <textarea id="chat-input" rows="3" data-i18n-placeholder="chat.input.placeholder" placeholder="问点什么…（Enter 发送，Shift + Enter 换行）"></textarea>
+            <button id="chat-send" class="btn primary chat-send" type="submit" data-i18n="chat.send">发送</button>
           </div>
           <div class="chat-composer-row">
             <label class="chat-target">
-              记入
+              <span data-i18n="chat.target.label">记入</span>
               <select id="chat-target">
-                <option value="current">当前笔记</option>
-                <option value="daily">今天的日记</option>
+                <option value="current" data-i18n="chat.target.current">当前笔记</option>
+                <option value="daily" data-i18n="chat.target.daily">今天的日记</option>
               </select>
             </label>
             <label class="chat-target">
-              参考
+              <span data-i18n="chat.context.label">参考</span>
               <select id="chat-context">
-                <option value="current">当前笔记</option>
-                <option value="daily">今天的日记</option>
-                <option value="none">不附带</option>
+                <option value="current" data-i18n="chat.target.current">当前笔记</option>
+                <option value="daily" data-i18n="chat.target.daily">今天的日记</option>
+                <option value="none" data-i18n="chat.target.none">不附带</option>
               </select>
             </label>
-            <button id="chat-cancel" class="btn" type="button" hidden>停止</button>
+            <button id="chat-cancel" class="btn" type="button" hidden data-i18n="chat.cancel">停止</button>
           </div>
         </form>
       </aside>
@@ -113,53 +114,53 @@
     <footer class="legend" id="legend"></footer>
 
     <div class="modal" id="settings-modal" hidden>
-      <div class="modal-card" role="dialog" aria-label="AI 设置">
+      <div class="modal-card" role="dialog" data-i18n-aria="settings.title" aria-label="AI 设置">
         <div class="modal-head">
-          <h2>AI 设置</h2>
-          <button id="settings-close" class="icon-btn" type="button" aria-label="关闭">✕</button>
+          <h2 data-i18n="settings.title">AI 设置</h2>
+          <button id="settings-close" class="icon-btn" type="button" data-i18n-aria="settings.close.aria" aria-label="关闭">✕</button>
         </div>
 
         <div class="modal-body">
           <label class="field">
-            <span>服务商预设</span>
+            <span data-i18n="settings.provider">服务商预设</span>
             <select id="setting-provider"></select>
           </label>
           <label class="field">
-            <span>接口地址</span>
+            <span data-i18n="settings.baseUrl">接口地址</span>
             <input id="setting-base-url" type="text" placeholder="https://api.openai.com/v1" />
           </label>
           <label class="field">
-            <span>模型</span>
+            <span data-i18n="settings.model">模型</span>
             <input id="setting-model" type="text" placeholder="gpt-4o-mini" />
           </label>
           <label class="field">
-            <span>API Key</span>
+            <span data-i18n="settings.apiKey">API Key</span>
             <input id="setting-api-key" type="password" autocomplete="off" placeholder="sk-..." />
             <small class="hint" id="setting-key-hint"></small>
           </label>
           <label class="field">
-            <span>系统提示词</span>
+            <span data-i18n="settings.systemPrompt">系统提示词</span>
             <textarea id="setting-system-prompt" rows="3"></textarea>
-            <small class="hint">这里只写角色、语气和回答风格；「对话 + 新增条目 + 笔记改动」的格式约定由应用自动接在后面，不需要你维护。</small>
+            <small class="hint" data-i18n="settings.systemPrompt.hint">这里只写角色、语气和回答风格；「对话 + 新增条目 + 笔记改动」的格式约定由应用自动接在后面，不需要你维护。</small>
           </label>
 
           <details class="prompt-protocol" id="setting-protocol">
-            <summary>应用自动追加的格式约定（随功能更新）</summary>
+            <summary data-i18n="settings.protocol.summary">应用自动追加的格式约定（随功能更新）</summary>
             <pre id="setting-protocol-text"></pre>
           </details>
           <p class="hint" id="setting-storage-hint"></p>
         </div>
 
         <div class="modal-foot">
-          <button id="settings-clear-key" class="btn" type="button">清除密钥</button>
+          <button id="settings-clear-key" class="btn" type="button" data-i18n="settings.clearKey">清除密钥</button>
           <span class="modal-status" id="settings-status"></span>
-          <button id="settings-save" class="btn primary" type="button">保存</button>
+          <button id="settings-save" class="btn primary" type="button" data-i18n="settings.save">保存</button>
         </div>
       </div>
     </div>
 
     <div id="drop-overlay" class="drop-overlay" hidden>
-      <div class="drop-overlay-inner">松手即可打开这个 .md 文件</div>
+      <div class="drop-overlay-inner" data-i18n="dropOverlay">松手即可打开这个 .md 文件</div>
     </div>
 
     <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
@@ -170,6 +171,10 @@
     <script src="../shared/ai-reply.js"></script>
     <script src="../shared/chat-to-note.js"></script>
     <script src="../shared/note-edit.js"></script>
+    <!-- 语言包：locales/ 文件夹（zh-CN 默认，en 英文；i18n.js 是组装器） -->
+    <script src="locales/zh-CN.js"></script>
+    <script src="locales/en.js"></script>
+    <script src="locales/i18n.js"></script>
     <script src="renderer.js"></script>
     <script src="chat.js"></script>
   </body>

@@ -11,6 +11,7 @@ const ChatToNote = window.ChatToNote;
 const AiReply = window.AiReply;
 const JournalDate = window.JournalDate;
 const NoteEdit = window.NoteEdit;
+const ChatI18n = window.I18n;
 
 const chatEls = {
   panel: document.getElementById('chat-panel'),
@@ -155,13 +156,16 @@ function renderJournalDraft(text) {
   return holder.innerHTML;
 }
 
-/** 现在会写到哪儿（写入按钮所在卡片上显示的提示） */
+/** 现在会写到哪儿（写入按钮所在卡片上显示的提示）；文案走 i18n */
 function targetLabel() {
-  return chatEls.target.value === 'daily' ? '记入：今天的日记' : '记入：当前笔记';
+  return chatEls.target.value === 'daily' ? ChatI18n.t('chat.target.dailyStatus') : ChatI18n.t('chat.target.currentStatus');
 }
 
-/** 改动指令 → 界面上显示的动词（划去不删原文） */
-const EDIT_LABELS = { replace: '改写', done: '完成', cancel: '划去' };
+/** 改动指令 → 界面上显示的动词（划去不删原文）；文案走 i18n，未知 kind 原样展示 */
+function editLabel(kind) {
+  const translated = ChatI18n.t(`chat.edit.${kind}`);
+  return translated === `chat.edit.${kind}` ? kind : translated;
+}
 
 /**
  * 把改动指令列成一份可读的清单：
@@ -177,11 +181,11 @@ function renderEditList(message) {
   edits.forEach((edit) => {
     const row = document.createElement('div');
     row.className = `chat-edit-row is-${edit.kind}`;
-    if (edit.kind === 'cancel') row.title = '划掉这一条，原文保留在笔记里';
+    if (edit.kind === 'cancel') row.title = ChatI18n.t('chat.edit.cancelTitle');
 
     const op = document.createElement('span');
     op.className = 'chat-edit-op';
-    op.textContent = EDIT_LABELS[edit.kind] || edit.kind;
+    op.textContent = editLabel(edit.kind);
 
     const old = document.createElement('span');
     old.className = 'chat-edit-old';
@@ -203,7 +207,7 @@ function renderEditList(message) {
   ignored.forEach((line) => {
     const row = document.createElement('div');
     row.className = 'chat-edit-row is-ignored';
-    row.textContent = `（看不懂这行，已忽略：${line}）`;
+    row.textContent = ChatI18n.t('chat.edit.ignoredRow', { line });
     list.append(row);
   });
 
@@ -213,8 +217,8 @@ function renderEditList(message) {
 /** 卡片头上的「新增 N 条 · 改动 M 处」 */
 function draftBadge(adds, edits) {
   const bits = [];
-  if (adds) bits.push(`新增 ${adds} 条`);
-  if (edits) bits.push(`改动 ${edits} 处`);
+  if (adds) bits.push(ChatI18n.t('chat.badge.adds', { n: adds }));
+  if (edits) bits.push(ChatI18n.t('chat.badge.edits', { n: edits }));
   return bits.join(' · ');
 }
 
@@ -224,7 +228,7 @@ function selectedTarget() {
 }
 
 function selectionLabel(target) {
-  return target === 'daily' ? '今天的日记' : '当前笔记';
+  return ChatI18n.t(target === 'daily' ? 'chat.target.daily' : 'chat.target.current');
 }
 
 /**
@@ -285,26 +289,26 @@ function renderJournalCard(message) {
   if (isPending) {
     // 还在等 AI 回复：占位卡片说明状态，绝不提前判「没有要写的内容」
     card.classList.add('is-empty', 'is-pending');
-    hint.textContent = '等待 AI 回复…';
+    hint.textContent = ChatI18n.t('chat.hint.waiting');
   } else if (isFallback) {
     // 模型没按协议回答：只能用兜底按钮，而且在卡片上说明白
     card.classList.add('is-empty', 'is-fallback');
-    hint.textContent = 'AI 没有给出独立的新增条目，写入会用全文要点；对话里的寒暄也会一起进去';
+    hint.textContent = ChatI18n.t('chat.hint.fallback');
 
     const saveBtn = document.createElement('button');
     saveBtn.type = 'button';
     saveBtn.className = 'btn tiny';
     saveBtn.dataset.action = 'save-full';
-    saveBtn.textContent = '写入全文要点';
+    saveBtn.textContent = ChatI18n.t('chat.save.full');
     tools.append(saveBtn);
   } else if (adds || edits.length) {
-    if (!parsed.journalComplete && adds) hint.textContent = '正在生成…';
+    if (!parsed.journalComplete && adds) hint.textContent = ChatI18n.t('chat.hint.generating');
 
     const saveBtn = document.createElement('button');
     saveBtn.type = 'button';
     saveBtn.className = 'btn tiny primary';
     saveBtn.dataset.action = 'save-note';
-    saveBtn.textContent = adds ? '写入笔记' : '应用改动';
+    saveBtn.textContent = adds ? ChatI18n.t('chat.save.note') : ChatI18n.t('chat.save.edits');
     tools.append(saveBtn);
 
     const opt = document.createElement('label');
@@ -312,14 +316,14 @@ function renderJournalCard(message) {
     const box = document.createElement('input');
     box.type = 'checkbox';
     box.dataset.role = 'with-question';
-    opt.append(box, document.createTextNode('带提问'));
+    opt.append(box, document.createTextNode(ChatI18n.t('chat.withQuestion')));
     tools.append(opt);
   } else {
     // 两段都是空的：这轮真的没有什么要写进笔记的
     card.classList.add('is-empty');
     hint.textContent = parsed.edit.trim()
-      ? '改动指令没看懂，已忽略（见上文）；这轮没有要写进笔记的内容'
-      : 'AI 认为这轮没有需要写进笔记的内容';
+      ? ChatI18n.t('chat.hint.editsIgnored')
+      : ChatI18n.t('chat.hint.nothingToWrite');
   }
 
   // 等待态还没有草稿可复制，暂时干出「复制草稿」按钮
@@ -328,7 +332,7 @@ function renderJournalCard(message) {
     copyBtn.type = 'button';
     copyBtn.className = 'btn tiny';
     copyBtn.dataset.action = 'copy-draft';
-    copyBtn.textContent = '复制草稿';
+    copyBtn.textContent = ChatI18n.t('chat.copyDraft');
     tools.append(copyBtn);
   }
   tools.append(status);
@@ -365,7 +369,7 @@ async function refreshCardPreview(message) {
     text = describePreview(report, snapshot);
   } catch (err) {
     if (message.previewToken !== token || !message.element) return;
-    text = `预览算不出来（${err && err.message ? err.message : err}），写入时还会再对一次`;
+    text = ChatI18n.t('chat.preview.error', { error: err && err.message ? err.message : err });
   }
 
   const preview = message.element && message.element.querySelector('.chat-journal-preview');
@@ -374,17 +378,17 @@ async function refreshCardPreview(message) {
 
 function describePreview(report, snapshot) {
   const bits = [];
-  if (report.added.length) bits.push(`新增 ${report.added.length} 条`);
-  if (report.merged.length) bits.push(`并入已有条目 ${report.merged.length} 条`);
-  if (report.edits.applied.length) bits.push(`改动 ${report.edits.applied.length} 处`);
-  if ((report.edits.unchanged || []).length) bits.push(`${report.edits.unchanged.length} 处改动已是最新`);
-  if (report.duplicates.length) bits.push(`跳过重复 ${report.duplicates.length} 条`);
-  if (report.edits.skipped.length) bits.push(`${report.edits.skipped.length} 处改动没对上`);
+  if (report.added.length) bits.push(ChatI18n.t('chat.preview.adds', { n: report.added.length }));
+  if (report.merged.length) bits.push(ChatI18n.t('chat.preview.merged', { n: report.merged.length }));
+  if (report.edits.applied.length) bits.push(ChatI18n.t('chat.preview.edits', { n: report.edits.applied.length }));
+  if ((report.edits.unchanged || []).length) bits.push(ChatI18n.t('chat.preview.unchanged', { n: report.edits.unchanged.length }));
+  if (report.duplicates.length) bits.push(ChatI18n.t('chat.preview.dropped', { n: report.duplicates.length }));
+  if (report.edits.skipped.length) bits.push(ChatI18n.t('chat.preview.skipped', { n: report.edits.skipped.length }));
 
   const where = selectionLabel(snapshot.target);
-  if (!bits.length) return `对照${where}：这里的条目笔记里已经有了，写入不会有改动`;
-  const duplicate = report.duplicates.length ? '（与已有条目重复的不再写一遍）' : '';
-  return `对照${where}：${bits.join(' · ')}${duplicate}`;
+  if (!bits.length) return ChatI18n.t('chat.preview.notChanged', { target: where });
+  const duplicate = report.duplicates.length ? ChatI18n.t('chat.preview.duplicateNote') : '';
+  return ChatI18n.t('chat.preview.line', { target: where, bits: bits.join(' · '), duplicate });
 }
 
 /** 目标笔记的现有内容（写入预览与「参考」都靠它） */
@@ -420,7 +424,7 @@ function renderChatMessage(message) {
   body.className = 'chat-body';
   if (isPendingMessage(message)) {
     // 等待 AI 回复：先给个「正在思考…」的占位，收到内容后立刻被替换
-    body.innerHTML = '<p class="chat-waiting"><span class="chat-waiting-dot"></span>正在思考…</p>';
+    body.innerHTML = `<p class="chat-waiting"><span class="chat-waiting-dot"></span>${ChatI18n.t('chat.thinking')}</p>`;
   } else if (message.role === 'user') {
     body.textContent = message.content;
   } else if (message.error) {
@@ -636,7 +640,7 @@ async function writeMessageToNote(message, button) {
 
   const payload = target === 'daily' ? { target: 'daily' } : { filePath: window.BujoApp.currentFile() && window.BujoApp.currentFile().path };
   if (target === 'current' && !payload.filePath) {
-    note.textContent = '先打开一篇笔记';
+    note.textContent = ChatI18n.t('chat.needOpenNote');
     note.classList.add('warn');
     return;
   }
@@ -668,13 +672,13 @@ async function writeMessageToNote(message, button) {
 /** 写入结果 → 一句人看得懂的话（新增 / 并入 / 改动 / 跳过重复各几条） */
 function describeWriteResult(result) {
   const report = result.report || {};
-  if (!result.changed) return '没有写入：这些内容笔记里已经有了，重复的条目不会再记一遍';
+  if (!result.changed) return ChatI18n.t('chat.write.nothingNew');
 
-  const bits = [`新增 ${(report.added || []).length}`];
-  if ((report.merged || []).length) bits.push(`并入 ${report.merged.length}`);
-  if ((report.edits || {}).applied && report.edits.applied.length) bits.push(`改动 ${report.edits.applied.length}`);
-  if ((report.duplicates || []).length) bits.push(`跳过重复 ${report.duplicates.length}`);
-  return `已写入 ${result.name}${result.created ? '（新建）' : ''}：${bits.join(' · ')}`;
+  const bits = [ChatI18n.t('chat.write.adds', { n: (report.added || []).length })];
+  if ((report.merged || []).length) bits.push(ChatI18n.t('chat.write.merged', { n: report.merged.length }));
+  if ((report.edits || {}).applied && report.edits.applied.length) bits.push(ChatI18n.t('chat.write.edits', { n: report.edits.applied.length }));
+  if ((report.duplicates || []).length) bits.push(ChatI18n.t('chat.write.duplicates', { n: report.duplicates.length }));
+  return ChatI18n.t('chat.write.line', { name: result.name, created: result.created ? ChatI18n.t('chat.write.created') : '', bits: bits.join(' · ') });
 }
 
 /* ---------------- 设置 ---------------- */
@@ -691,7 +695,7 @@ function fillSettingsForm() {
   // 把应用真正会拼上去的格式约定原样展示出来，设置里看到的就是实际发出的要求
   chatEls.protocolText.textContent = AiReply.PROTOCOL_PROMPT;
   chatEls.apiKey.value = '';
-  chatEls.apiKey.placeholder = settings.hasApiKey ? '已保存（留空则不改动）' : 'sk-...';
+  chatEls.apiKey.placeholder = settings.hasApiKey ? ChatI18n.t('settings.keyHint.saved') : 'sk-...';
   chatEls.keyHint.textContent = settings.hasApiKey
     ? `当前密钥末四位：…${settings.apiKeyHint || '****'}（输入新值可替换）`
     : '密钥只保存在主进程，界面与应用日志都不会显示它';
@@ -725,14 +729,14 @@ async function saveSettings() {
 
   const result = await window.bujo.saveSettings(patch);
   if (!result || !result.ok) {
-    chatEls.status2.textContent = (result && result.error) || '保存失败';
+    chatEls.status2.textContent = (result && result.error) || ChatI18n.t('settings.saveFailed');
     chatEls.status2.classList.add('warn');
     return;
   }
 
   chatState.settings = result.settings;
   chatEls.apiKey.value = '';
-  chatEls.status2.textContent = '已保存';
+  chatEls.status2.textContent = ChatI18n.t('settings.saved');
   chatEls.status2.classList.remove('warn');
   fillSettingsForm();
   updateChatStatus();

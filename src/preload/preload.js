@@ -67,6 +67,12 @@ contextBridge.exposeInMainWorld('bujo', {
   /** 界面主题列表：styles/ 文件夹里的 每个 .css（除 base.css 布局基底）→ [{ id, label }] */
   listThemes: () => ipcRenderer.invoke('themes:list'),
 
+  /** 界面语言列表：locales/ 文件夹里的 每个 .js（除 i18n.js 助手）→ [{ id, label }] */
+  listLocales: () => ipcRenderer.invoke('locales:list'),
+
+  /** 插件列表：plugins/ 文件夹里带插件清单的子文件夹 → { plugins, errors } */
+  listPlugins: () => ipcRenderer.invoke('plugins:list'),
+
   /** 清除已保存的 API Key */
   clearApiKey: () => ipcRenderer.invoke('settings:clear-key'),
 

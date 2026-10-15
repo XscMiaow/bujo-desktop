@@ -98,6 +98,93 @@
   var EVENT_RE = /^([ \t]*)o[ \t]+(.*)$/;
   var FENCE_RE = /^[ \t]{0,3}(`{3,}|~{3,})(.*)$/;
 
+  /* ---------------- 插件注册的自定义子弹 ---------------- */
+
+  /**
+   * 插件清单带来的自定义子弹（registerCustomBullets 登记后生效）：
+   *   { kind, marks?, native?, glyph, label, cls?, color?, taskLike? }
+   *   + marks  复选框写法：marks:['p'] → `- [p] 文字` 到 kind
+   *   + native 原生符号写法：native:['◐'] → `◐ 文字`（单字、非字母数字，避免跟单词冲突）
+   * taskLike（默认 true）：能不能「完成」；颜色由界面拿 color 写进 --kind-<kind> 变量。
+   */
+  var customBullets = []; // 登记成功的，按注册顺序
+  var customNative = []; // { glyph, kind, re }
+
+  var RESERVED_KIND_RE = /^(total|progress)$/; // 与统计条目的预设计数键冲突，不能当 kind
+  var RESERVED_GLYPH_RE = /^[o•·○]$/i; // 与内置事件/任务的原生符号冲突，不收
+
+  function glyphRegex(glyph) {
+    // 单字符直接上行首匹配；用捕获组拿缩进与正文
+    return new RegExp('^([ \\t]*)' + glyph.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '[ \\t]+(.*)$');
+  }
+
+  /**
+   * 注册一批自定义子弹成功返回 true；kind 重复/写法非法返回 false（忽略该条，不抛异常）。
+   * @returns {{ kind: string, glyph: string, label: string, cls: string, symbol: string, taskLike: boolean }}
+   */
+  function registerCustomBullet(bullet) {
+    bullet = bullet || {};
+    var kind = String(bullet.kind || '').toLowerCase();
+    if (!/^[a-z][a-z0-9-]{0,23}$/.test(kind) || RESERVED_KIND_RE.test(kind) || KINDS[kind]) return null;
+
+    var marks = (Array.isArray(bullet.marks) ? bullet.marks : [])
+      .map(function (mark) { return String(mark); })
+      .filter(function (mark) {
+        // 空白标记/带空格标记会撞「- [ ] 」待办写法，一律不收
+        return /^[^\[\]]{1,3}$/.test(mark) && mark === mark.trim() && mark.length > 0 && CHECKBOX_TO_KIND[mark] === undefined;
+      });
+
+    var nativeGlyphs = (Array.isArray(bullet.native) ? bullet.native : [])
+      .map(function (glyph) { return String(glyph); })
+      .filter(function (glyph) {
+        return glyph.length === 1 && !/[a-zA-Z0-9\[\]]/.test(glyph) && !RESERVED_GLYPH_RE.test(glyph);
+      });
+
+    if (!marks.length && !nativeGlyphs.length) return null; // 至少要有一种写法
+
+    // 登记前先检查冲突：有任何一个 mark/native 撞上已登记的就放弃整个 bullet（先到先得）
+    var conflicts = false;
+    marks.forEach(function (mark) {
+      if (CHECKBOX_TO_KIND[mark] !== undefined) conflicts = true;
+    });
+    // native 检查内置符号和已登记 native 的冲突
+    nativeGlyphs.forEach(function (glyph) {
+      if (customNative.some(function (entry) { return entry.glyph === glyph; })) conflicts = true;
+    });
+    if (conflicts) return null;
+
+    marks.forEach(function (mark) {
+      CHECKBOX_TO_KIND[mark] = kind;
+    });
+
+    nativeGlyphs.forEach(function (glyph) {
+      customNative.push({ glyph: glyph, kind: kind, re: glyphRegex(glyph) });
+    });
+
+    var meta = {
+      kind: kind,
+      glyph: String(bullet.glyph || (nativeGlyphs[0] || marks[0])).slice(0, 3),
+      label: String(bullet.label || kind).slice(0, 20),
+      cls: String(bullet.cls || '').replace(/[^a-zA-Z0-9-]/g, '') || 'is-' + kind,
+      symbol: bullet.symbol || (nativeGlyphs.length ? nativeGlyphs[0] + ' text' : '- [' + marks[0] + ']'),
+      taskLike: bullet.taskLike !== false,
+      color: /^#[0-9a-fA-F]{3,8}$/.test(String(bullet.color || '')) ? bullet.color : null
+    };
+    KINDS[kind] = meta;
+    customBullets.push(meta);
+    return meta;
+  }
+
+  /** 注册一批插件清单里的自定义子弹；逐条登记，返回成功的清单（含归一化后的 meta） */
+  function registerCustomBullets(bullets) {
+    return (Array.isArray(bullets) ? bullets : []).map(registerCustomBullet).filter(Boolean);
+  }
+
+  /** 已登记的自定义子弹 meta（界面拿它补图例/统计/按钮，主进程拿它校验） */
+  function getCustomBullets() {
+    return customBullets.slice();
+  }
+
   /**
    * 解析单行为子弹条目，不是子弹则返回 null。
    * 划去条目会带 prior（被划去之前的类型），供「取消划去」还回原符号。
@@ -109,6 +196,14 @@
     var m = NATIVE_RE.exec(line);
     if (m) {
       return { kind: 'task', text: m[3].trim(), indent: indentWidth(m[1]) };
+    }
+
+    // 插件的自定义原生符号（◐ 日记 之类）：和 o 事件同位匹配
+    for (var ci = 0; ci < customNative.length; ci++) {
+      m = customNative[ci].re.exec(line);
+      if (m) {
+        return { kind: customNative[ci].kind, text: m[2].trim(), indent: indentWidth(m[1]) };
+      }
     }
 
     m = LIST_RE.exec(line);
@@ -215,7 +310,7 @@
     return { blocks: blocks, stats: countStats(blocks) };
   }
 
-  /** 统计各类子弹数量，用于顶部的「今日进度」 */
+  /** 统计各类子弹数量，用于顶部的「今日进度」；插件自定义 kind 按需生成计数字段 */
   function countStats(blocks) {
     var stats = { total: 0, task: 0, done: 0, cancelled: 0, note: 0, event: 0, migrated: 0, scheduled: 0, priority: 0 };
     // priority 现在是叠加标记：单独为带星标的条目计数，供顶部「优先 N」小胶囊展示
@@ -223,7 +318,7 @@
       if (block.type !== 'bullets') return;
       block.items.forEach(function (item) {
         stats.total += 1;
-        if (stats[item.kind] !== undefined) stats[item.kind] += 1;
+        stats[item.kind] = (stats[item.kind] || 0) + 1;
         if (item.priority) stats.priority += 1;
       });
     });
@@ -235,6 +330,9 @@
     KINDS: KINDS,
     CHECKBOX_TO_KIND: CHECKBOX_TO_KIND,
     CANCEL_PRIOR: CANCEL_PRIOR,
+    registerCustomBullet: registerCustomBullet,
+    registerCustomBullets: registerCustomBullets,
+    getCustomBullets: getCustomBullets,
     parseBulletLine: parseBulletLine,
     parseDocument: parseDocument,
     countStats: countStats,

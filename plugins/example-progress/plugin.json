@@ -1,0 +1,16 @@
+{
+  "id": "example-progress",
+  "name": "进行中（示例插件）",
+  "description": "自定义子弹的官方示例：新增一种「进行中 ◐ / - [p]」类型，并用橙色标记它。可直接当模板复制改值。",
+  "bullets": [
+    {
+      "kind": "in-progress",
+      "marks": ["p"],
+      "glyph": "◐",
+      "label": "进行中",
+      "cls": "is-in-progress",
+      "color": "#f0a868",
+      "taskLike": true
+    }
+  ]
+}
