@@ -28,6 +28,7 @@ const els = {
   reloadBtn: document.getElementById('reload-btn'),
   viewPreview: document.getElementById('view-preview'),
   viewSource: document.getElementById('view-source'),
+  viewTasks: document.getElementById('view-tasks'),
   fileMeta: document.getElementById('file-meta'),
   stats: document.getElementById('stats'),
   error: document.getElementById('error'),
@@ -57,8 +58,28 @@ const state = {
   blocks: [],
   stats: null,
   view: 'preview',
-  journals: [] // 日记目录里的文件，最新在前
+  journals: [], // 日记目录里的文件，最新在前
+  taskJournal: null, // 「每日任务」视图：今天的日记 { path, name, content } 或 null
+  taskError: null, // 「每日任务」读不到的原因（'none' = 今天的日记还没建）
+  taskListPath: null, // 「每日任务」视图里操作写回的目标（今天的日记）
+  foldedGroups: loadFoldedGroups() // 侧边栏折叠中的分组 key（年/月/集子）
 };
+
+/** 侧边栏分组折叠的存储键与读写（坏值一律当「全展开」处理） */
+const FOLD_STORAGE_KEY = 'bujo.sidebar.fold';
+function loadFoldedGroups() {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(FOLD_STORAGE_KEY) || '[]');
+    return new Set(Array.isArray(parsed) ? parsed.filter((key) => typeof key === 'string') : []);
+  } catch {
+    return new Set();
+  }
+}
+function saveFoldedGroups() {
+  try {
+    localStorage.setItem(FOLD_STORAGE_KEY, JSON.stringify([...state.foldedGroups]));
+  } catch { /* 存不了只影响偏好记忆 */ }
+}
 
 /* ---------------- 渲染 ---------------- */
 
@@ -90,7 +111,8 @@ function renderFileMeta() {
   }
   const { name, dir, size, modifiedAt } = state.file;
   const kb = (size / 1024).toFixed(1);
-  const time = new Date(modifiedAt).toLocaleString('zh-CN', { hour12: false });
+  // 时间戳跟着界面语言走（zh-CN 中文格式，en 英文格式…）
+  const time = new Date(modifiedAt).toLocaleString(I18n.getLocale() || 'zh-CN', { hour12: false });
   els.fileMeta.innerHTML = `<strong>${escapeHtml(name)}</strong> · ${escapeHtml(t('fileMeta.line', { dir: escapeHtml(dir), kb, time }))}`;
 }
 
@@ -241,7 +263,7 @@ async function applyMoveAction(entry, destination) {
   });
 
   const result = await window.bujo.moveBullet({
-    filePath: state.file.path,
+    filePath: activeWritePath(),
     line: Number(entry.dataset.line),
     text: entry.dataset.text || '',
     destination
@@ -264,10 +286,8 @@ async function applyMoveAction(entry, destination) {
     : t('toast.alreadyInTarget', { target: (result && result.destName) || t('toast.target.default') });
   showToast(result.destChanged ? movedLabel : alreadyLabel);
 
-  const scrollTop = els.content.scrollTop;
-  await loadFile(state.file.path);
+  await reloadAfterWrite();
   await refreshJournals();
-  els.content.scrollTop = scrollTop;
 }
 
 /** 一个子弹列表 → <ul>，符号由「子弹类型」决定，而不是原始文本 */
@@ -299,19 +319,17 @@ function buildBulletList(block) {
 
     // 缩进映射成固定步长，层级太深也不会跑出屏幕
     const indentPx = Math.min(item.indent, 12) * 6;
-    if (indentPx > 0) li.style.setProperty('--indent', `${indentPx}px`);
-
-    const glyph = document.createElement('span');
-    glyph.className = 'bujo-glyph';
-    glyph.textContent = meta.glyph;
-    glyph.title = meta.label;
+    if (indentPx > 0) li.style.setProperty('--indent', `${indentPx}px`);    const glyph = document.createElement('span');
+      glyph.className = 'bujo-glyph';
+      glyph.textContent = meta.glyph;
+      glyph.title = kindLabel(item.kind, meta);
 
     // 优先居标：紧跟主符号后面的一个金色 ★，任何类型上都能看到
     if (item.priority) {
       const star = document.createElement('span');
       star.className = 'bujo-star';
       star.textContent = '★';
-      star.title = '优先事项';
+      star.title = t('state.priority');
       glyph.after(star);
     }
 
@@ -331,11 +349,44 @@ function renderNote() {
   els.note.hidden = false;
   els.emptyState.hidden = true;
 
+  // 「每日任务」视图：今天的任务清单（不需要先打开文件）
+  if (state.view === 'tasks') {
+    renderDailyTasksInto(els.note);
+    return;
+  }
+
+  // 「原文」视图：直接可编辑的 Markdown 编辑器（Ctrl/Cmd + S 保存，或点保存按钮）
   if (state.view === 'source') {
-    const pre = document.createElement('pre');
-    pre.className = 'source-view';
-    pre.textContent = state.file ? state.file.content : '';
-    els.note.append(pre);
+    const editor = document.createElement('textarea');
+    editor.id = 'source-editor';
+    editor.className = 'source-editor';
+    editor.spellcheck = false;
+    editor.value = state.file ? state.file.content : '';
+    editor.addEventListener('keydown', (event) => {
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 's') {
+        event.preventDefault();
+        saveSourceEditor();
+      }
+    });
+
+    const bar = document.createElement('div');
+    bar.className = 'source-editor-bar';
+    const saveBtn = document.createElement('button');
+    saveBtn.type = 'button';
+    saveBtn.className = 'btn primary tiny';
+    saveBtn.dataset.role = 'save-source';
+    saveBtn.textContent = t('source.save');
+    saveBtn.addEventListener('click', () => saveSourceEditor());
+    const hint = document.createElement('span');
+    hint.className = 'source-editor-hint';
+    hint.textContent = t('source.editor.hint');
+    bar.append(saveBtn, hint);
+
+    els.note.append(bar, editor);
+    if (state.focusSource) {
+      state.focusSource = false;
+      editor.focus();
+    }
     return;
   }
 
@@ -356,14 +407,124 @@ function renderAll() {
   renderFileMeta();
   renderStats(state.stats);
 
-  const hasFile = Boolean(state.file);
-  els.reloadBtn.disabled = !hasFile;
-  if (!hasFile) {
+  // 「每日任务」视图不需要先打开文件也能工作
+  const hasContent = Boolean(state.file) || state.view === 'tasks';
+  els.reloadBtn.disabled = !state.file;
+  if (!hasContent) {
     els.note.hidden = true;
     els.emptyState.hidden = false;
     return;
   }
   renderNote();
+}
+
+/* ---------------- 原文编辑器（source 视图直接改 Markdown） ---------------- */
+
+/** 编辑器被改动后标记有未保存内容（离开前不丢）；保存成功后就清掉 */
+function markSourceDirty() {
+  state.sourceDirty = true;
+}
+
+/** 把原文编辑器里的内容保存回原文件（白名单与其它写入口一致） */
+async function saveSourceEditor() {
+  if (!state.file || state.view !== 'source') return;
+  const editor = document.getElementById('source-editor');
+  if (!editor) return;
+
+  const result = await window.bujo.saveNote(state.file.path, editor.value);
+  if (!result || !result.ok) {
+    showError(t('error.saveSource', { error: (result && result.error) || t('error.prefix') }));
+    return;
+  }
+  state.sourceDirty = false;
+  clearError();
+  showToast(t('toast.saved'));
+  const view = els.content.scrollTop;
+  await loadFile(state.file.path);
+  els.content.scrollTop = view;
+}
+
+/* ---------------- 每日任务列表（视图：今天日记里的任务清单） ---------------- */
+
+/** 拉今天的日记（不会顺手建文件），算出任务清单的班级数据 */
+async function loadDailyTasks() {
+  state.taskListPath = null;
+  state.taskJournal = null;
+  state.taskError = null;
+  const result = await window.bujo.getTodayJournal({ create: false });
+  if (!result || !result.ok) {
+    state.taskError = (result && result.error) || t('error.prefix');
+  } else if (!result.exists) {
+    state.taskError = 'none';
+  } else {
+    state.taskJournal = { path: result.path, name: result.name, content: result.content || '' };
+    state.taskListPath = result.path;
+  }
+  if (state.view === 'tasks') renderNote();
+}
+
+/** 今天的任务清单：待办/优先/计划/迁移在前，完成次之，划去垫底（不可操作的行不带按钮） */
+function renderDailyTasksInto(target) {
+  target.innerHTML = '';
+  const lib = window.JournalDate;
+  const date = new Date();
+
+  const holder = document.createElement('div');
+  holder.className = 'daily-tasks';
+
+  const head = document.createElement('h2');
+  head.className = 'daily-tasks-head';
+  head.textContent = `${lib.dateKey(date)} · ${t('tasks.title')}`;
+  const meta = document.createElement('p');
+  meta.className = 'daily-tasks-meta';
+
+  if (!state.taskJournal) {
+    meta.textContent = state.taskError === 'none' ? t('tasks.none') : `${t('tasks.readFailed')}：${state.taskError || t('error.prefix')}`;
+    holder.append(head, meta);
+    target.append(holder);
+    return;
+  }
+
+  const parsed = Bujo.parseDocument(state.taskJournal.content || '');
+  const items = parsed.blocks.flatMap((block) => (block.type === 'bullets' ? block.items : []));
+  const open = items.filter((item) => isTaskLike(item.kind) || item.kind === 'migrated' || item.kind === 'scheduled');
+  const done = items.filter((item) => item.kind === 'done');
+  const struck = items.filter((item) => item.kind === 'cancelled');
+  meta.textContent = t('tasks.count', { open: open.length, done: done.length, struck: struck.length });
+
+  const ordered = [
+    ...open.filter((item) => !item.priority),
+    ...open.filter((item) => item.priority),
+    ...done,
+    ...struck
+  ];
+  holder.append(head, meta);
+  if (ordered.length) holder.append(buildBulletList({ type: 'bullets', items: ordered }));
+  const hint = document.createElement('p');
+  hint.className = 'daily-tasks-hint';
+  hint.textContent = t('tasks.hint');
+  holder.append(hint);
+  target.append(holder);
+}
+
+/** 条目操作写回的目标路径：每日任务视图里是今天的日记，其它情况是当前打开的文件 */
+function activeWritePath() {
+  return state.view === 'tasks' && state.taskListPath ? state.taskListPath : state.file && state.file.path;
+}
+
+/** 写完后的刷新：任务列表视图重新拉今天的清单，其它视图重载当前文件 */
+async function reloadAfterWrite() {
+  const scroll = els.content.scrollTop;
+  if (state.view === 'tasks') {
+    await loadDailyTasks();
+  } else if (state.file) {
+    await loadFile(state.file.path);
+    if (state.view === 'source') {
+      // 原文编辑器不被外部旧值覆盖：重载后重新渲染（编辑器是新的一捧）
+      state.focusSource = false;
+    }
+  }
+  els.content.scrollTop = scroll;
 }
 
 /* ---------------- 左侧日记栏 ---------------- */
@@ -431,10 +592,12 @@ function renderJournalList() {
   [...years.values()]
     .sort((a, b) => Number(b.year) - Number(a.year))
     .forEach((yearGroup) => {
-      // 年文件夹标题
+      // 年文件夹标题（可折叠：点一下收起/展开整年的日记）
       const head = document.createElement('li');
       head.className = 'journal-group';
-      head.innerHTML = `<span class="journal-group-name">${escapeHtml(yearGroup.year)}</span><span class="journal-group-hint">${escapeHtml(t('sidebar.group.year'))}</span>`;
+      head.dataset.foldKey = `y:${yearGroup.year}`;
+      head.title = t('sidebar.group.fold.hint');
+      head.innerHTML = `<span class="fold-caret">▾</span><span class="journal-group-name">${escapeHtml(yearGroup.year)}</span><span class="journal-group-hint">${escapeHtml(t('sidebar.group.year'))}</span>`;
       els.journalList.append(head);
 
       // 年度（未来）记录：已有用真实文件，否则给一行「双击新建」
@@ -459,7 +622,8 @@ function renderJournalList() {
           const monthHead = document.createElement('li');
           monthHead.className = 'journal-group month';
           if (monthDate) monthHead.title = lib.monthLabel(monthDate);
-          monthHead.innerHTML = `<span class="journal-group-name">${escapeHtml(monthDate ? `${monthDate.getMonth() + 1} 月` : monthGroup.month)}</span>`;
+          monthHead.dataset.foldKey = `m:${monthGroup.month}`;
+          monthHead.innerHTML = `<span class="fold-caret">▾</span><span class="journal-group-name">${escapeHtml(monthDate ? lib.monthLabel(monthDate) : monthGroup.month)}</span>`;
           els.journalList.append(monthHead);
 
           if (monthGroup.monthly) {
@@ -484,7 +648,8 @@ function renderJournalList() {
     .forEach(([name, files]) => {
       const head = document.createElement('li');
       head.className = 'journal-group collection';
-      head.innerHTML = `<span class="journal-group-name">${escapeHtml(name)}</span><span class="journal-group-hint">${escapeHtml(t('sidebar.group.collection'))}</span>`;
+      head.dataset.foldKey = `c:${name}`;
+      head.innerHTML = `<span class="fold-caret">▾</span><span class="journal-group-name">${escapeHtml(name)}</span><span class="journal-group-hint">${escapeHtml(t('sidebar.group.collection'))}</span>`;
       els.journalList.append(head);
       files.forEach((file) => {
         els.journalList.append(journalRow({ label: journalLabel(file.name, file.role), path: file.path, modifiedAt: file.modifiedAt }));
@@ -501,6 +666,22 @@ function renderJournalList() {
     });
   }
 
+  // 折叠归属：按源序扫描，分组头记录当前上下文链，子行带上自己的链
+  let foldChain = [];
+  [...els.journalList.children].forEach((li) => {
+    if (li.classList.contains('journal-group')) {
+      if (li.dataset.foldKey) {
+        foldChain = [...(li.dataset.foldChain || '').split(';').filter(Boolean), li.dataset.foldKey];
+        // 组头自己也会被外层折叠（折叠「2026」时月组头也收起来）
+        li.dataset.foldChain = foldChain.slice(0, -1).join(';');
+      } else {
+        foldChain = [];
+      }
+      return;
+    }
+    li.dataset.foldChain = foldChain.join(';');
+  });
+  applyGroupFolds();
   markActiveJournal();
 
   /** 把文件列表归成「年 → 月 + 自定义集子」；认不出年份且不在集子里的归入末尾散件组 */
@@ -554,10 +735,25 @@ async function refreshJournals() {
   renderJournalList();
 }
 
+/**
+ * 应用分组折叠：折叠组收起它的全部子行；偏好存在 localStorage（坏值当全展开）。
+ * 组头上的「▾/▸」随状态翻面。
+ */
+function applyGroupFolds() {
+  [...els.journalList.children].forEach((li) => {
+    const chain = (li.dataset.foldChain || '').split(';').filter(Boolean);
+    li.hidden = chain.some((key) => state.foldedGroups.has(key));
+    if (li.dataset.foldKey) {
+      const caret = li.querySelector('.fold-caret');
+      if (caret) caret.textContent = state.foldedGroups.has(li.dataset.foldKey) ? '▸' : '▾';
+    }
+  });
+}
+
 function setSidebarCollapsed(collapsed) {
   els.sidebar.classList.toggle('collapsed', collapsed);
   els.sidebarToggle.textContent = collapsed ? '›' : '‹';
-  els.sidebarToggle.title = collapsed ? '展开日记栏' : '收起日记栏';
+  els.sidebarToggle.title = collapsed ? t('sidebar.toggle.expand') : t('sidebar.toggle.collapse');
   try {
     localStorage.setItem(SIDEBAR_KEY, collapsed ? '1' : '0');
   } catch {
@@ -629,7 +825,8 @@ function showToast(message) {
 async function applyBulletAction(act) {
   const entry = act.closest('.bujo-entry');
   const mark = entry && markForAction(entry, act.dataset.act);
-  if (!entry || !mark || !state.file) return;
+  const filePath = activeWritePath();
+  if (!entry || !mark || !filePath) return;
 
   const buttons = [...entry.querySelectorAll('.bujo-act')];
   buttons.forEach((button) => {
@@ -637,7 +834,7 @@ async function applyBulletAction(act) {
   });
 
   const result = await window.bujo.setBulletMark({
-    filePath: state.file.path,
+    filePath,
     line: Number(entry.dataset.line),
     text: entry.dataset.text || '',
     mark
@@ -656,9 +853,7 @@ async function applyBulletAction(act) {
   showToast(result.changed ? t('toast.marked', { label }) : t('toast.already', { label }));
 
   // 重新解析整篇：符号、统计、行号都跟着更新（保持滚动位置，别把视线顶回页首）
-  const scrollTop = els.content.scrollTop;
-  await loadFile(state.file.path);
-  els.content.scrollTop = scrollTop;
+  await reloadAfterWrite();
 }
 
 async function loadFile(filePath) {
@@ -711,6 +906,11 @@ function setView(view) {
   state.view = view;
   els.viewPreview.classList.toggle('active', view === 'preview');
   els.viewSource.classList.toggle('active', view === 'source');
+  if (els.viewTasks) els.viewTasks.classList.toggle('active', view === 'tasks');
+  if (view === 'tasks') {
+    loadDailyTasks();
+    return;
+  }
   if (state.file) renderNote();
 }
 
@@ -718,6 +918,7 @@ els.openBtn.addEventListener('click', openViaDialog);
 els.reloadBtn.addEventListener('click', reload);
 els.viewPreview.addEventListener('click', () => setView('preview'));
 els.viewSource.addEventListener('click', () => setView('source'));
+if (els.viewTasks) els.viewTasks.addEventListener('click', () => setView('tasks'));
 els.sidebarToggle.addEventListener('click', () => setSidebarCollapsed(!els.sidebar.classList.contains('collapsed')));
 els.sidebarRefresh.addEventListener('click', refreshJournals);
 
@@ -728,6 +929,7 @@ els.sidebarRefresh.addEventListener('click', refreshJournals);
 async function openJournalRow(li) {
   if (!li) return;
   const ensureSpec = li.dataset.ensure;
+  if (!ensureSpec && !li.dataset.path) return; // 分组头不是日记，点了也不应该有反映
   if (ensureSpec) {
     let spec;
     try {
@@ -748,8 +950,17 @@ async function openJournalRow(li) {
   await loadFile(li.dataset.path);
 }
 
-// 日记列表：单击选中，双击打开（回车同样可以打开）
+// 日记列表：单击选中，双击打开（回车同样可以打开）；点分组头 = 折叠/展开该组
 els.journalList.addEventListener('click', (event) => {
+  const head = event.target.closest('.journal-group[data-fold-key]');
+  if (head) {
+    const key = head.dataset.foldKey;
+    if (state.foldedGroups.has(key)) state.foldedGroups.delete(key);
+    else state.foldedGroups.add(key);
+    saveFoldedGroups();
+    applyGroupFolds();
+    return;
+  }
   const item = event.target.closest('.journal-item');
   if (item) markSelectedJournal(item.dataset.path);
 });
@@ -1024,10 +1235,12 @@ function applyFloatingMode() {
 
   els.sidebar.classList.add('collapsed');
 
-  // 进悬浮窗：消息区收着，只留一小行输入（AI 有新回复时才自动弹出）。
-  // 直接挂类：这个 script 排在 chat.js 前面，此时 BujoChat 可能还没定义。
-  document.getElementById('chat-panel').classList.add('messages-hidden');
-  floating.messagesHidden = true;
+  // 进悬浮窗：消息区收起（正文博满余下空间，输入行贴底），AI 有新回复时才自动弹出。
+  // 走统一入口而不是直接挂类：收起态的正文博满与贴底样式也会一并生效（否则开窗时仍是半屏黑区）。
+  // 同时强制打开聊天面板：主窗口里把聊天收起过的状态不能带入悬浮窗（否则小窗里压根开不了聊天）。
+  const panelAtOpen = document.getElementById('chat-panel');
+  if (panelAtOpen) panelAtOpen.hidden = false;
+  setFloatingMessagesVisible(false);
 
   /**
    * 悬浮窗没有系统标题栏（主进程 frame:false）：
@@ -1039,12 +1252,12 @@ function applyFloatingMode() {
   bar.id = 'float-bar';
   bar.className = 'float-bar'; // 样式全部走 .float-bar 类（此前只有 id，样式规则没命中 → 整条不可拖、折叠钮不靠右、间距丢失）
   bar.innerHTML = [
-    '<button id="float-back" class="float-btn" type="button" title="回主窗口">⌂</button>',
-    '<button id="chat-new" class="float-btn" type="button" title="新建对话（AI 忘掉之前的聊天）">＋</button>',
-    '<button id="chat-clear-screen" class="float-btn" type="button" title="清屏（只清这扇窗口，上下文还继续）">⌫</button>',
-    '<span id="float-title" class="float-title" draggable="false">• 今日要点</span>',
+    `<button id="float-back" class="float-btn" type="button" title="${escapeHtml(t('floating.back'))}">⌂</button>`,
+    `<button id="chat-new" class="float-btn" type="button" title="${escapeHtml(t('chat.new.title'))}">＋</button>`,
+    `<button id="chat-clear-screen" class="float-btn" type="button" title="${escapeHtml(t('chat.clear.title'))}">⌫</button>`,
+    `<span id="float-title" class="float-title" draggable="false">${escapeHtml(t('floating.title'))}</span>`,
     '<span id="float-unread" class="float-unread" hidden></span>',
-    '<button id="float-collapse" class="float-btn" type="button" title="折叠成同宽窄条 / 展开完整悬浮窗">−</button>'
+    `<button id="float-collapse" class="float-btn" type="button" title="${escapeHtml(t('floating.collapse.expand'))}">−</button>`
   ].join('');
   document.body.prepend(bar);
 
@@ -1073,7 +1286,7 @@ function applyFloatingMode() {
   messagesBtn.id = 'chat-messages-btn';
   messagesBtn.className = 'float-btn chat-messages-btn';
   messagesBtn.type = 'button';
-  messagesBtn.title = '展开聊天回复';
+  messagesBtn.title = t('floating.messages.expand');
   messagesBtn.textContent = '⌄';
   panel.prepend(messagesBtn);
   messagesBtn.addEventListener('click', () => {
@@ -1101,7 +1314,7 @@ function applyFloatingCollapsed(collapsed) {
   const button = document.getElementById('float-collapse');
   if (button) {
     button.textContent = floating.collapsed ? '+' : '−';
-    button.title = floating.collapsed ? '展开完整悬浮窗' : '折叠成一条窄条';
+    button.title = floating.collapsed ? t('floating.expand') : t('floating.collapse');
   }
 }
 
@@ -1153,8 +1366,8 @@ function syncFloatingMessagesButton() {
   button.textContent = floating.messagesHidden ? '⌄' : '⌃';
   // 展开时按钮在消息区顶部露出（向下收）；收起时贴输入行上方露出（向上开）
   button.title = streaming
-    ? '正在生成回复（生成结束后才可再收/展）'
-    : floating.messagesHidden ? '展开聊天回复' : '收起聊天回复';
+    ? t('floating.messages.locked')
+    : floating.messagesHidden ? t('floating.messages.expand') : t('floating.messages.collapse');
   button.classList.toggle('locked', streaming);
 }
 
@@ -1437,8 +1650,8 @@ window.__bujoSmokeTestMove = async (option, text) => {
 /**
  * 自检：迁移语义的三步闭环——
  * ① 已迁移（[>]）的条目不再给「»」，原地直接迁会被判为不可迁；
- * ② 点「取消迁移」回到普通待办；
- * ③ 重新迁移（= 重新迁移旧项目）：目标日志里已有一份时不重复加（提示条可验证）。
+ * ② 点「取消迁移」回到普通待办；目标日志里的原样副本 **同时被收掉**；
+ * ③ 重新迁移：目标日志里重新出现一份（且只有一份，与取消迁移前不残留多余子弹）。
  */
 window.__bujoSmokeTestRemigrate = async (text) => {
   const entry = findEntryByText(text);
@@ -1446,7 +1659,19 @@ window.__bujoSmokeTestRemigrate = async (text) => {
   const moveBlocked = Boolean(entry && !entry.querySelector('.bujo-act[data-act="move"]'));
   if (!entry) return { ok: false, reason: 'no-entry', text, moveBlocked };
 
-  // ② 取消迁移：恢复为普通待办
+  /** 数一数目标日志（月度记录）里同一件事的副本出现的次数；读不到返回 null */
+  const countInTarget = async (needle) => {
+    try {
+      const listed = await window.bujo.listJournals();
+      const monthly = (listed.files || []).find((file) => file.role === 'monthly');
+      if (!monthly) return null;
+      const file = await window.bujo.readFile(monthly.path);
+      if (!file || !file.ok) return null;
+      return file.file.content.split(String(needle)).length - 1;
+    } catch { return null; }
+  };
+
+  // ② 取消迁移：恢复为普通待办（副本同时被收掉）
   const restore = entry.querySelector('.bujo-act[data-act="restore"]');
   let restoredKind = null;
   if (restore) {
@@ -1454,8 +1679,9 @@ window.__bujoSmokeTestRemigrate = async (text) => {
     const waited = await waitEntryKind(text, 'task');
     restoredKind = waited.kind;
   }
+  const destCountAfterRestore = await countInTarget(text);
 
-  // ③ 再迁一次：同样落到 [>]；目标已有一份时不重复加
+  // ③ 再迁一次：目标已收掉的副本重新迁出（这次是全新的一份，目标里仍只有一份）
   let reMovedKind = null;
   let toastText = '';
   const button = findEntryByText(text) && findEntryByText(text).querySelector('.bujo-act[data-act="move"]');
@@ -1471,9 +1697,12 @@ window.__bujoSmokeTestRemigrate = async (text) => {
       toastText = els.toast.hidden ? '' : els.toast.textContent;
     }
   }
+  const destCountAfterMove = await countInTarget(text);
 
-  const ok = moveBlocked && restoredKind === 'task' && reMovedKind === 'migrated' && toastText.includes('没有重复加');
-  return { ok, text, moveBlocked, restoredKind, reMovedKind, toastText, hasMoveAfterRestore: Boolean(button) };
+  const ok = moveBlocked && restoredKind === 'task' && reMovedKind === 'migrated' &&
+    (destCountAfterRestore !== null && destCountAfterRestore === 0) &&
+    (destCountAfterMove !== null && destCountAfterMove === 1);
+  return { ok, text, moveBlocked, restoredKind, reMovedKind, toastText, destCountAfterRestore, destCountAfterMove, hasMoveAfterRestore: Boolean(button) };
 };
 
 /**
@@ -1759,3 +1988,85 @@ async function initPlugins() {
   const initial = await window.bujo.getInitialFile();
   if (initial) await loadFile(initial);
 })();
+
+/* ---------------- 自检：新增能力的整链验证（tasks / 折叠 / 原文编辑器） ---------------- */
+
+window.__bujoSmokeTestExtra = async () => {
+  const report = {};
+
+  // ① 每日任务列表：今天的日记（smoke 预置了一条待办）→ 切到 tasks 视图能列出；点「完成」写回今天的日记
+  const previousView = state.view;
+  setView('tasks');
+  await new Promise((resolve) => setTimeout(resolve, 350));
+  const taskHead = document.querySelector('.daily-tasks-head');
+  const taskEntries = [...document.querySelectorAll('#note .bujo-entry')];
+  const target = taskEntries.find((li) => li.dataset.text === '自检侧边栏示例');
+
+  let doneWritten = false;
+  if (target) {
+    const act = target.querySelector('.bujo-act[data-act="done"]');
+    if (act) {
+      act.click();
+      await new Promise((resolve) => setTimeout(resolve, 450));
+      const today = await window.bujo.getTodayJournal({ create: false });
+      doneWritten = Boolean(today && today.content && today.content.includes('- [x] 自检侧边栏示例'));
+    }
+  }
+  report.tasks = {
+    head: taskHead ? taskHead.textContent : null,
+    entries: taskEntries.length,
+    countMeta: (document.querySelector('.daily-tasks-meta') || {}).textContent || '',
+    dailyDoneWritten: doneWritten,
+    ok: Boolean(taskHead) && taskEntries.length > 0 && doneWritten
+  };
+  setView(previousView === 'tasks' ? 'preview' : previousView);
+  await new Promise((resolve) => setTimeout(resolve, 120));
+
+  // ② 分组折叠：年组头点一下收起（子行隐藏、记忆保留），再点展开；收起时月组头也被一并收下
+  const yearHead = els.journalList.querySelector('.journal-group[data-fold-key^="y:"]');
+  let fold = { ok: false };
+  if (yearHead) {
+    const yearKey = yearHead.dataset.foldKey;
+    const childrenBefore = [...els.journalList.children].filter((li) => li.hidden).length;
+    yearHead.click();
+    const collapsedChildren = [...els.journalList.children].filter((li) => li.hidden).length;
+    const persisted = (() => {
+      try { return (JSON.parse(localStorage.getItem(FOLD_STORAGE_KEY) || '[]')).includes(yearKey); } catch { return false; }
+    })();
+    const caretFolded = (yearHead.querySelector('.fold-caret') || {}).textContent === '▸';
+    yearHead.click();
+    const restoredChildren = [...els.journalList.children].filter((li) => li.hidden).length;
+    fold = {
+      ok: collapsedChildren > childrenBefore && persisted && caretFolded && restoredChildren === childrenBefore,
+      collapsedChildren,
+      persisted,
+      caretFolded
+    };
+  }
+  report.fold = fold;
+
+  // ③ 原文编辑器：切到原文 → textarea 可编辑 → 点保存 → 文件落盘并被重新解析
+  const originalPreviewFile = (state.file && state.file.path) || null;
+  setView('source');
+  await new Promise((resolve) => setTimeout(resolve, 150));
+  const editor = document.getElementById('source-editor');
+  let editorOk = false;
+  if (editor && state.file) {
+    editor.value = `${state.file.content}\n- [ ] 编辑器自检条目\n`;
+    const saveBtn = editor.parentElement.querySelector('button[data-role="save-source"]');
+    saveBtn.click();
+    await new Promise((resolve) => setTimeout(resolve, 400));
+    const file = await window.bujo.readFile(state.file.path);
+    editorOk = Boolean(file && file.ok && file.file.content.includes('编辑器自检条目'));
+  }
+  report.sourceEditor = {
+    editorPresent: Boolean(editor),
+    saved: editorOk,
+    ok: Boolean(editor) && editorOk
+  };
+  if (originalPreviewFile) await loadFile(originalPreviewFile);
+  setView('preview');
+
+  report.ok = report.tasks.ok && report.fold.ok && report.sourceEditor.ok;
+  return report;
+};

@@ -97,15 +97,19 @@ function locationFrom(folder, fileName) {
 /**
  * 一篇日记在侧边栏里的角色：
  *   'daily'   每日记录（文件名形如 2026-10-07）
- *   'monthly' 月度记录（固定名「月度记录」，或旧平铺的 2026-10.md 一次性迁移后归入这种）
- *   'future'  年度（未来）记录（固定名「未来记录」）
+ *   'monthly' 月度记录（默认英文「Monthly Log」；旧版中文名「月度记录」与平铺的 2026-10.md 仍按同一角色识别）
+ *   'future'  年度（未来）记录（默认英文「Future Log」；旧版中文名「未来记录」仍按同一角色识别）
  *   'other'   认不出角色的散文件，照样列出
  */
 function roleOf(fileName) {
-  const base = stripExtension(fileName);
-  if (base === MONTHLY_RECORD_FILE.replace(/\.md$/, '') || MONTH_RE.test(base)) return 'monthly';
-  if (base === FUTURE_RECORD_FILE.replace(/\.md$/, '') || base.toLowerCase() === 'future-log') return 'future';
+  const base = stripExtension(fileName) || '';
+  const lower = base.toLowerCase();
   if (DAY_RE.test(base)) return 'daily';
+  // 月度：2026-10 平铺迁移件 / 默认英文名 / 旧版中文名，都算
+  if (MONTH_RE.test(base)) return 'monthly';
+  if (['monthly log', '月度记录', '月记录', '月度笔记'].includes(lower)) return 'monthly';
+  // 年度（未来）记录：默认英文名 / 带连字符的旧写法 / 旧版中文名，都算
+  if (['future log', 'future-log', '未来记录', '年度记录'].includes(lower)) return 'future';
   return 'other';
 }
 
@@ -214,14 +218,18 @@ function dailyTemplate(date) {
   return `# ${dateLabel(date)}\n\n## 任务\n\n## 笔记\n`;
 }
 
-/** 月度记录（一月一篇，与每日记录同一个月文件夹） */
+/**
+ * 月度记录（一月一篇，与每日记录同一个月文件夹）。
+ * 默认用英文生成（与 Monthly Log.md 文件名配套）；旧文件里的中文小节不受影响——
+ * 写入已不再依赖「任务/笔记」小节，统一在末尾追加并去重。
+ */
 function monthlyTemplate(date) {
-  return `# ${monthLabel(date)} · 月度记录\n\n## 任务\n\n## 笔记\n`;
+  return `# ${monthLabel(date)} · Monthly Log\n\n## Tasks\n\n## Notes\n`;
 }
 
-/** 年度（未来）记录（一年一篇，年文件夹里） */
+/** 年度（未来）记录（一年一篇，年文件夹里）；默认同样用英文生成 */
 function futureTemplate(date) {
-  return `# ${yearLabel(date)} · 未来记录\n\n## 任务\n\n## 笔记\n`;
+  return `# ${yearLabel(date)} · Future Log\n\n## Tasks\n\n## Notes\n`;
 }
 
 /* ---------------- 相对路径（归属于哪个文件夹） ---------------- */
@@ -332,8 +340,8 @@ async function ensureMoveDestination(dir, spec = {}) {
     kind === 'tomorrow'
       ? `明天（${dateKey(targetDate)}）的日记`
       : kind === 'nextMonth'
-        ? `${monthLabel(targetDate)} · 月度记录`
-        : `${yearLabel(targetDate)} · 未来记录`;
+        ? `下月（${dateKey(targetDate)}）的 Monthly Log`
+        : `${yearLabel(targetDate)} Future Log`;
 
   return { path: journal.path, name: journal.name, kind, dateKey: dateKey(targetDate), label, created: journal.created };
 }

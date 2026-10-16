@@ -1,0 +1,71 @@
+/**
+ * 粉白主题：浅色纸面 + 樱花粉点缀，与 light.css 同一套 token。
+ * 新增主题 = 复制这份改 token 值，放进 styles/ 目录，重启应用就会出现在主题下拉里。
+ */
+
+:root {
+  color-scheme: light;
+
+  --bg: #f9f1f4;
+  --bg-elevated: #fffafa;
+  --bg-hover: #f4e4ea;
+  --border: #ecd6de;
+  --text: #3a2430;
+  --text-dim: #8a6474;
+  --accent: #d15b8c;
+
+  --kind-task: #bc3f70;
+  --kind-done: #2e8b57;
+  --kind-cancelled: #a08a92;
+  --kind-migrated: #a24bc9;
+  --kind-scheduled: #2e8fa4;
+  --kind-priority: #c47a2b;
+  --kind-note: #8a6474;
+  --kind-event: #d64565;
+
+  --scrollbar: #e2c9d2;
+  --scrollbar-strong: #c9a3b2;
+  --bg-panel: #f4e4ea;
+
+  --journal-selected: #f2dde5;
+  --journal-active: #fbdce8;
+  --btn-hover-border: #e0bccb;
+  --btn-hover-bg: #f6e6ec;
+  --accent-text: #ffffff;
+  --accent-hover: #b8497a;
+
+  --chat-user-border: #f2c9d8;
+  --chat-user-bg: #fdeef4;
+  --chat-journal-border: #f2c9d8;
+  --chat-journal-bg: #fdf3f7;
+  --note-border: #e4ccd5;
+  --chat-context-border: #e6d4da;
+  --chat-editops-border: #e6d4da;
+  --chat-editops-bg: #f9edf1;
+  --chat-editop-bg: #f3e1e8;
+
+  --chip-bg: #f9dfe9;
+  --chip-text: #9d2f60;
+  --code-bg: #f4e6eb;
+  --code-text: #4a2e3a;
+  --text-soft: #4d2f3c;
+
+  --danger-border: #e3b3b8;
+  --danger-bg: #fdecee;
+  --danger-text: #b3253e;
+  --overlay-bg: rgba(64, 30, 44, 0.42);
+  --shadow-color: rgba(96, 44, 64, 0.18);
+  --shadow-strong: rgba(96, 44, 64, 0.3);
+
+  --priority-bg: rgba(196, 122, 43, 0.14);
+  --priority-bg-hover: rgba(196, 122, 43, 0.24);
+  --act-bg: #fffafa;
+  --act-hover-border: #e0bccb;
+  --done-deco: rgba(46, 139, 87, 0.55);
+  --cancelled-border: #e4ccd5;
+  --cancelled-bg: rgba(249, 240, 244, 0.85);
+  --cancelled-bg-hover: #f4e8ec;
+  --cancelled-deco: rgba(160, 138, 146, 0.7);
+  --cancelled-text: #a3929a;
+  --stamp-bg: rgba(255, 250, 250, 0.95);
+}

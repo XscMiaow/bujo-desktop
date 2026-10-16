@@ -1,0 +1,70 @@
+/**
+ * 粉黑主题：深色界面 + 樱花粉点缀，与 dark.css 同一套 token。
+ */
+
+:root {
+  color-scheme: dark;
+
+  --bg: #17121a;
+  --bg-elevated: #201923;
+  --bg-hover: #2a212e;
+  --border: #382b3d;
+  --text: #efe6ee;
+  --text-dim: #b59db1;
+  --accent: #f783ac;
+
+  --kind-task: #f783ac;
+  --kind-done: #71c894;
+  --kind-cancelled: #8d7f93;
+  --kind-migrated: #c79bf0;
+  --kind-scheduled: #5cc3d3;
+  --kind-priority: #e8b579;
+  --kind-note: #b59db1;
+  --kind-event: #ff8d9d;
+
+  --scrollbar: #4a3a51;
+  --scrollbar-strong: #66526e;
+  --bg-panel: #1c151f;
+
+  --journal-selected: #382641;
+  --journal-active: #4a2540;
+  --btn-hover-border: #55405e;
+  --btn-hover-bg: #332540;
+  --accent-text: #1e1022;
+  --accent-hover: #ff9dc0;
+
+  --chat-user-border: #4c2a44;
+  --chat-user-bg: #2c1c2a;
+  --chat-journal-border: #5c2f4f;
+  --chat-journal-bg: #231424;
+  --note-border: #4a3950;
+  --chat-context-border: #3e2c45;
+  --chat-editops-border: #3e2c45;
+  --chat-editops-bg: #1f1624;
+  --chat-editop-bg: #312135;
+
+  --chip-bg: #4a2540;
+  --chip-text: #f5b8d5;
+  --code-bg: #120f15;
+  --code-text: #ded0db;
+  --text-soft: #e3d2e0;
+
+  --danger-border: #6b2734;
+  --danger-bg: #2a161c;
+  --danger-text: #ffb3c0;
+  --overlay-bg: rgba(12, 8, 14, 0.72);
+  --shadow-color: rgba(0, 0, 0, 0.45);
+  --shadow-strong: #0009;
+
+  --priority-bg: rgba(232, 181, 121, 0.1);
+  --priority-bg-hover: rgba(232, 181, 121, 0.2);
+  --act-bg: #201923;
+  --act-hover-border: #55405e;
+  --done-deco: rgba(113, 200, 148, 0.55);
+  --cancelled-border: #453a4d;
+  --cancelled-bg: rgba(20, 15, 23, 0.82);
+  --cancelled-bg-hover: #261d2b;
+  --cancelled-deco: rgba(141, 127, 147, 0.66);
+  --cancelled-text: #8d7f93;
+  --stamp-bg: rgba(32, 25, 35, 0.95);
+}

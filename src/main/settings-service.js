@@ -23,8 +23,25 @@ const DEFAULT_SETTINGS = {
 };
 
 /**
- * 早期版本的默认提示词。功能改成「对话 + 日记块」后，旧文案会让模型直接把要点写进回答，
- * 看到就自动换成新默认值；用户自己改过的提示词一律保留。
+ * 每种界面语言一句默认提示词。用户没写过（或仍是其它语言的默认值）时，
+ * 系统提示词自动跟着界面语言走；用户自己改过的一律保留。
+ */
+const DEFAULT_SYSTEM_PROMPTS = {
+  'zh-CN': DEFAULT_SETTINGS.systemPrompt,
+  en: 'You are the Bullet Journal assistant. Answer in English, concisely and directly: conclusions, explanations and follow-up questions go to the user; check what is already in the note first — edit existing entries instead of writing the same thing twice.'
+};
+
+/** 所有会内部当作默认值的提示词（各语言默认 + 旧版默认），对上任何一个都视为「没自定义过」 */
+const ALL_DEFAULT_PROMPTS = [
+  ...Object.values(DEFAULT_SYSTEM_PROMPTS),
+  '你是子弹笔记（Bullet Journal）助手，中文作答。回答简洁、直接：结论、解释和追问说给用户听，值得长期留存的内容才写成日记条目，不要堆砌。',
+  '你是子弹笔记（Bullet Journal）助手。回答简洁、条理清晰；可以执行的动作请写成「- [ ] 事项」，普通要点写成「- 要点」。',
+  '你是子弹笔记（Bullet Journal）助手。中文作答，回答简洁、条理清晰。'
+].map((prompt) => prompt.trim());
+
+/**
+ * 早期版本的默认提示词（中文）。功能改成「对话 + 日记块」后，旧文案会让模型直接把要点写进回答；
+ * 这些文案现在包含在 ALL_DEFAULT_PROMPTS 里，会被自动升级成当前语言的默认值。
  */
 const LEGACY_SYSTEM_PROMPTS = [
   '你是子弹笔记（Bullet Journal）助手，中文作答。回答简洁、直接：结论、解释和追问说给用户听，值得长期留存的内容才写成日记条目，不要堆砌。',
@@ -44,6 +61,9 @@ const PROVIDER_PRESETS = [
 ];
 
 const LAST_KEY_HINT_LENGTH = 4;
+
+/** 没存过 locale 时的默认界面语言 */
+const DEFAULT_LOCALE_ID = 'zh-CN';
 
 class SettingsService {
   /**
@@ -79,31 +99,35 @@ class SettingsService {
   }
 
   /**
-   * 读出生效的系统提示词：
-   * - 没写过 → 新默认值
-   * - 还是旧版默认文案 → 自动升级成新默认值（它描述的是旧行为）
-   * - 用户自己写的（包括清空）→ 原样返回
+   * 读出当前界面语言下生效的系统提示词：
+   * - 没写过 → 当前语言的默认值
+   * - 还是某个语言的默认文案（含旧版默认）→ 自动跟着界面语言走
+   * - 用户自己写的（包括清空）→ 原样返回，不随语言变
+   * @param {string} [locale] 当前界面语言（settings.locale，如 'zh-CN' / 'en'）
    */
-  resolveSystemPrompt(raw) {
-    if (typeof raw.systemPrompt !== 'string') return DEFAULT_SETTINGS.systemPrompt;
+  resolveSystemPrompt(raw, locale) {
+    const currentLocale = typeof locale === 'string' && locale ? locale : DEFAULT_LOCALE_ID;
+    if (typeof raw.systemPrompt !== 'string') return DEFAULT_SYSTEM_PROMPTS[currentLocale] || DEFAULT_SETTINGS.systemPrompt;
     const trimmed = raw.systemPrompt.trim();
-    if (LEGACY_SYSTEM_PROMPTS.includes(trimmed)) return DEFAULT_SETTINGS.systemPrompt;
+    if (ALL_DEFAULT_PROMPTS.includes(trimmed)) return DEFAULT_SYSTEM_PROMPTS[currentLocale] || DEFAULT_SETTINGS.systemPrompt;
     return raw.systemPrompt;
   }
 
     /** 可以安全交给渲染层的部分：不含 key，只含 key 是否已配置与末四位提示 */
   getPublic() {
     const raw = this.readRaw();
+    const locale = typeof raw.locale === 'string' && /^[a-z]{2,3}(-[A-Za-z0-9]{2,8}){0,2}$/.test(raw.locale) ? raw.locale : DEFAULT_LOCALE_ID;
     return {
       baseUrl: typeof raw.baseUrl === 'string' && raw.baseUrl ? raw.baseUrl : DEFAULT_SETTINGS.baseUrl,
       model: typeof raw.model === 'string' && raw.model ? raw.model : DEFAULT_SETTINGS.model,
       provider: typeof raw.provider === 'string' ? raw.provider : DEFAULT_SETTINGS.provider,
-      systemPrompt: this.resolveSystemPrompt(raw),
+      // 系统提示词：没自定义过（或是另一个语言的默认文案）时自动用当前语言那一句
+      systemPrompt: this.resolveSystemPrompt(raw, locale),
       temperature: typeof raw.temperature === 'number' ? raw.temperature : DEFAULT_SETTINGS.temperature,
       // 界面主题（styles/ 文件夹里那份 css 的 id）；坏值/conflict 都回落到默认深色
       theme: typeof raw.theme === 'string' && /^[a-z0-9-]{1,24}$/.test(raw.theme) ? raw.theme : 'dark',
       // 界面语言（locales/ 文件夹里那份字典的 id）；坏值回落默认中文
-      locale: typeof raw.locale === 'string' && /^[a-z]{2,3}(-[A-Za-z0-9]{2,8}){0,2}$/.test(raw.locale) ? raw.locale : 'zh-CN',
+      locale,
       hasApiKey: Boolean(raw.apiKeyCipher || raw.apiKey),
       apiKeyHint: typeof raw.apiKeyHint === 'string' ? raw.apiKeyHint : null,
       encrypted: Boolean(raw.apiKeyCipher) && this.encryptor.isAvailable(),

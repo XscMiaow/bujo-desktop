@@ -278,17 +278,58 @@
   ].join('\n');
 
   /**
+   * 插件注册的自定义子弹 → 系统提示词里的一段符号说明。
+   * 模型不认识这些符号就不会用：<journal> 里要能直接写出插件的写法。
+   */
+  function pluginBulletSection(bullets) {
+    const lines = (Array.isArray(bullets) ? bullets : [])
+      .map((bullet) => {
+        if (!bullet || typeof bullet !== 'object') return null;
+        const label = String(bullet.label || bullet.kind || '').trim();
+        const kind = String(bullet.kind || '').trim();
+        if (!label && !kind) return null;
+        const mark = Array.isArray(bullet.marks) && bullet.marks.length ? String(bullet.marks[0]).trim() : '';
+        const native = Array.isArray(bullet.native) && bullet.native.length ? String(bullet.native[0]).trim() : '';
+        if (mark) return `- [${mark}] ${label || kind}`;
+        if (native) return `${native} ${label || kind}`;
+        return null;
+      })
+      .filter(Boolean);
+    if (!lines.length) return '';
+    return [
+      '【插件自定义子弹】',
+      '本应用的插件还启用了下面这些自定义子弹符号，可直接在 <journal> 里使用（写法与应用解析器一致）：',
+      ...lines
+    ].join('\n');
+  }
+
+  /**
    * 拼出发给模型的系统提示词。
-   * 用户自己在设置里写了标签就不再追加，避免提示词重复。
    *
-   * @param {string} [userPrompt]
+   * @param {string} [userPrompt] 用户自己的提示词（设置里已按界面语言解析好）
+   * @param {{ locale?: string, customBullets?: Array<object> }} [options]
+   *   locale        当前界面语言；英文界面时追加一句「用英文写两段内容」
+   *   customBullets 插件注册的自定义子弹（{ kind, label, marks?, native? }）
    * @returns {string}
    */
-  function buildSystemPrompt(userPrompt) {
+  function buildSystemPrompt(userPrompt, options = {}) {
     const base = typeof userPrompt === 'string' ? userPrompt.trim() : '';
-    if (!base) return PROTOCOL_PROMPT;
-    if (/<\s*(?:journal|note-edit)\s*>/i.test(base)) return base;
-    return `${base}\n\n${PROTOCOL_PROMPT}`;
+    const customSection = pluginBulletSection(options.customBullets);
+    const languageNote = options.locale === 'en'
+      ? 'IMPORTANT language rule: write every part of the reply (<chat>, <journal>, <note-edit>) in English; translate entry text from the user\'s own language into English where needed.'
+      : '';
+    let head = base;
+    if (customSection) head = head ? `${head}\n\n${customSection}` : customSection;
+    if (!head) return languageNote ? `${PROTOCOL_PROMPT}
+
+${languageNote}` : PROTOCOL_PROMPT;
+    // 「用户自己写了协议」就不再追加：只看用户的 base（插件说明文字里提到 <journal> 不能误判）
+    if (base && /<\s*(?:journal|note-edit)\s*>/i.test(base)) {
+      return languageNote ? `${head}
+
+${languageNote}` : head;
+    }
+    return [head, PROTOCOL_PROMPT, languageNote].filter(Boolean).join('\n\n');
   }
 
   return {

@@ -43,7 +43,10 @@ const chatEls = {
   systemPrompt: document.getElementById('setting-system-prompt'),
   protocol: document.getElementById('setting-protocol'),
   protocolText: document.getElementById('setting-protocol-text'),
-  storageHint: document.getElementById('setting-storage-hint')
+  storageHint: document.getElementById('setting-storage-hint'),
+  chips: document.getElementById('chat-attach-chips'),
+  attachFile: document.getElementById('chat-attach-file'),
+  attachFolder: document.getElementById('chat-attach-folder')
 };
 
 const CHAT_OPEN_KEY = 'bujo.chat.open';
@@ -56,12 +59,24 @@ const chatState = {
   settings: null,
   requestId: null,
   streaming: false,
-  pendingRender: false
+  pendingRender: false,
+  attachedFiles: [] // 手动添加的参考文件/文件夹 { path, name }
 };
 
 /* ---------------- 面板开关 ---------------- */
 
 function setChatOpen(open) {
+  // 悬浮小窗里聊天面板是不可关闭的：主窗口收起聊天的状态不能带进来，
+  // 否则小窗里没有输入行入口（收起聊天后切小窗会打不开 AI 聊天）。
+  // 偏好存储里记「开着」，回主窗口时仍是这两个动作看重到的状态。
+  if (document.body.classList.contains('is-floating')) {
+    chatEls.panel.hidden = false;
+    try {
+      localStorage.setItem(CHAT_OPEN_KEY, '1');
+    } catch { /* 忽略 */ }
+    if (open) chatEls.input.focus();
+    return;
+  }
   chatEls.panel.hidden = !open;
   chatEls.toggle.classList.toggle('active', open);
   try {
@@ -418,7 +433,7 @@ function renderChatMessage(message) {
 
   const role = document.createElement('div');
   role.className = 'chat-role';
-  role.textContent = message.role === 'user' ? '你' : 'AI';
+  role.textContent = message.role === 'user' ? ChatI18n.t('chat.role.you') : ChatI18n.t('chat.role.ai');
 
   const body = document.createElement('div');
   body.className = 'chat-body';
@@ -432,9 +447,11 @@ function renderChatMessage(message) {
   } else {
     // 气泡里只放对话内容，日记块单独成卡片
     const parsed = parsedReply(message);
-    body.innerHTML = parsed.chat
-      ? markdown(parsed.chat)
-      : '<p class="chat-body-dim">（这条回答只有日记内容）</p>';
+    const bodyText = document.createElement('p');
+    bodyText.className = 'chat-body-dim';
+    bodyText.textContent = parsed.chat ? '' : ChatI18n.t('chat.onlyJournal');
+    body.innerHTML = parsed.chat ? markdown(parsed.chat) : '';
+    if (bodyText.textContent) body.append(bodyText);
   }
 
   li.append(role, body);
@@ -451,7 +468,7 @@ function renderChatMessage(message) {
       copyBtn.type = 'button';
       copyBtn.className = 'btn tiny';
       copyBtn.dataset.action = 'copy';
-      copyBtn.textContent = '复制对话';
+      copyBtn.textContent = ChatI18n.t('chat.copy.chat');
 
       tools.append(copyBtn);
       li.append(tools);
@@ -509,9 +526,11 @@ function scheduleAssistantRender(message) {
 
     const body = message.element.querySelector('.chat-body');
     if (body) {
-      body.innerHTML = parsed.chat
-        ? markdown(parsed.chat)
-        : '<p class="chat-body-dim">（这条回答只有日记内容）</p>';
+      const dim = document.createElement('p');
+      dim.className = 'chat-body-dim';
+      dim.textContent = parsed.chat ? '' : ChatI18n.t('chat.onlyJournal');
+      body.innerHTML = parsed.chat ? markdown(parsed.chat) : '';
+      if (dim.textContent) body.append(dim);
     }
 
     // 首个增量到了：把等待占位换成真实的草稿卡（或兜底卡的说明），并补上工具条
@@ -526,7 +545,7 @@ function scheduleAssistantRender(message) {
       copyBtn.type = 'button';
       copyBtn.className = 'btn tiny';
       copyBtn.dataset.action = 'copy';
-      copyBtn.textContent = '复制对话';
+      copyBtn.textContent = ChatI18n.t('chat.copy.chat');
       tools.append(copyBtn);
       message.element.querySelector('.chat-journal').after(tools);
     }
@@ -541,7 +560,7 @@ function setStreaming(streaming) {
   chatState.streaming = streaming;
   chatEls.send.disabled = streaming;
   chatEls.cancel.hidden = !streaming;
-  chatEls.send.textContent = streaming ? '生成中…' : '发送';
+  chatEls.send.textContent = streaming ? ChatI18n.t('chat.sending') : ChatI18n.t('chat.send');
   // 悬浮窗：悬浮条上的「⌕」按钮随生成开始/结束锁定/解锁
   if (typeof window.__bujoOnChatStreamingChanged === 'function') {
     try { window.__bujoOnChatStreamingChanged(); } catch { /* 页面助手不可用就忽略 */ }
@@ -554,8 +573,73 @@ function updateChatStatus() {
     chatEls.status.textContent = '';
     return;
   }
-  chatEls.status.textContent = settings.hasApiKey ? settings.model : '未配置密钥';
+  chatEls.status.textContent = settings.hasApiKey ? settings.model : ChatI18n.t('chat.noKey');
   chatEls.status.classList.toggle('warn', !settings.hasApiKey);
+}
+
+/**
+ * 手动添加的参考文件/文件夹（「📎/📁」按钮）：发送时随请求交给主进程，
+ * 由主进程按白名单（日记目录内或本次会话打开过）核对后读进上下文。
+ */
+function attachedPaths() {
+  return chatState.attachedFiles.map((file) => file.path);
+}
+
+function renderAttachChips() {
+  if (!chatEls.chips) return;
+  chatEls.chips.innerHTML = '';
+  chatState.attachedFiles.forEach((file) => {
+    const chip = document.createElement('span');
+    chip.className = 'chat-attach-chip';
+    chip.title = file.path;
+    const label = document.createElement('span');
+    label.className = 'chat-attach-name';
+    label.textContent = file.name;
+    const remove = document.createElement('button');
+    remove.type = 'button';
+    remove.className = 'chat-attach-remove';
+    remove.textContent = '✕';
+    remove.title = ChatI18n.t('chat.attach.remove');
+    remove.addEventListener('click', () => {
+      chatState.attachedFiles = chatState.attachedFiles.filter((item) => item.path !== file.path);
+      renderAttachChips();
+    });
+    chip.append(label, remove);
+    chatEls.chips.append(chip);
+  });
+  chatEls.chips.hidden = chatState.attachedFiles.length === 0;
+}
+
+/** 错误/说明走主窗口右下角 toast（有在才用） */
+function notifyUser(message) {
+  if (typeof showToast === 'function') showToast(message);
+}
+
+async function pickAttach(kind) {
+  try {
+    const result = await window.bujo.pickChatContext(kind);
+    if (!result || !result.ok) return;
+    if (!result.canceled) {
+      const existing = new Set(chatState.attachedFiles.map((file) => file.path.toLowerCase()));
+      const fresh = (result.files || []).filter((file) => !existing.has(file.path.toLowerCase()));
+      if (fresh.length) {
+        chatState.attachedFiles.push(...fresh);
+        renderAttachChips();
+      }
+    }
+    const skipped = (result.errors || [])
+      .concat((result || {}).contextNoteErrors || []);
+    if (skipped.length) notifyUser(`${ChatI18n.t('chat.attach.skipped')}${skipped.join(ChatI18n.t('chat.attach.joinSep'))}`);
+    else if (result.canceled) notifyUser(ChatI18n.t('chat.attach.canceled'));
+    else if (!(result.files || []).length && !result.canceled) notifyUser(ChatI18n.t('chat.attach.empty'));
+  } catch (err) {
+    notifyUser(`${ChatI18n.t('chat.attach.failed')}${err && err.message ? err.message : err}`);
+  }
+}
+
+function setAttachChips(list) {
+  chatState.attachedFiles = (list || []).slice();
+  renderAttachChips();
 }
 
 async function sendMessage(text) {
@@ -563,7 +647,7 @@ async function sendMessage(text) {
   if (!question || chatState.streaming) return;
 
   if (!chatState.settings || !chatState.settings.hasApiKey) {
-    appendMessage({ role: 'assistant', content: '还没有配置 API Key，点右上角 ⚙ 填一个再聊。', error: true });
+    appendMessage({ role: 'assistant', content: ChatI18n.t('chat.noKeyPrompt'), error: true });
     openSettings();
     return;
   }
@@ -586,7 +670,9 @@ async function sendMessage(text) {
     requestId,
     messages: [...history, { role: 'user', content: question }],
     // 把已有笔记交给主进程附在提问后面，AI 才知道哪些事已经记过了
-    noteContext: contextRequest()
+    noteContext: contextRequest(),
+    // 手动添加的参考文件（📎/📁）：主进程核对白名单后一起读进上下文
+    extraFiles: attachedPaths()
   });
 
   setStreaming(false);
@@ -602,10 +688,12 @@ async function sendMessage(text) {
     assistant.error = true;
     // 只留已经收到的对话部分，别把 <chat>/<journal> 标签露给用户
     const partial = parsedReply(assistant).chat;
-    assistant.content = partial ? `${partial}\n\n（已停止）` : '（已停止）';
+    assistant.content = partial ? `${partial}
+
+${ChatI18n.t('chat.aborted')}` : ChatI18n.t('chat.aborted');
   } else {
     assistant.error = true;
-    assistant.content = (result && result.error) || '请求失败';
+    assistant.content = (result && result.error) || ChatI18n.t('chat.requestFailed');
   }
   // 无论结果是什么，等待态到此结束
   assistant.pending = false;
@@ -683,6 +771,12 @@ function describeWriteResult(result) {
 
 /* ---------------- 设置 ---------------- */
 
+/** 弹窗开着的时候重新填一次表单（语言切换后提示词文案会跟着变） */
+function fillSettingsIfOpen() {
+  if (chatEls.modal.hidden) return;
+  fillSettingsForm();
+}
+
 function fillSettingsForm() {
   const settings = chatState.settings || {};
   chatEls.provider.innerHTML = (settings.presets || [])
@@ -697,11 +791,11 @@ function fillSettingsForm() {
   chatEls.apiKey.value = '';
   chatEls.apiKey.placeholder = settings.hasApiKey ? ChatI18n.t('settings.keyHint.saved') : 'sk-...';
   chatEls.keyHint.textContent = settings.hasApiKey
-    ? `当前密钥末四位：…${settings.apiKeyHint || '****'}（输入新值可替换）`
-    : '密钥只保存在主进程，界面与应用日志都不会显示它';
+    ? `${ChatI18n.t('settings.keyHint.lastFour')}：…${settings.apiKeyHint || '****'}（${ChatI18n.t('settings.keyHint.replace')}）`
+    : ChatI18n.t('settings.keyHint.note');
   chatEls.storageHint.textContent = settings.encryptionAvailable
-    ? '密钥用系统钥匙串加密后保存在用户目录，不进项目、不进版本库。'
-    : '当前系统不支持加密存储（safeStorage 不可用），密钥会以明文保存在用户目录的 settings.json。';
+    ? ChatI18n.t('settings.storage.encrypted')
+    : ChatI18n.t('settings.storage.plain');
   chatEls.storageHint.classList.toggle('warn', !settings.encryptionAvailable);
   chatEls.status2.textContent = '';
 }
@@ -756,7 +850,7 @@ chatEls.clearKeyBtn.addEventListener('click', async () => {
     chatState.settings = result.settings;
     fillSettingsForm();
     updateChatStatus();
-    chatEls.status2.textContent = '已清除密钥';
+    chatEls.status2.textContent = ChatI18n.t('settings.keyCleared');
   }
 });
 
@@ -767,6 +861,10 @@ chatEls.provider.addEventListener('change', () => {
   if (preset.baseUrl) chatEls.baseUrl.value = preset.baseUrl;
   if (preset.model) chatEls.model.value = preset.model;
 });
+
+// 参考文件/文件夹添加按钮：弹系统对话框，主进程核对白名单后返回可读的文件清单
+if (chatEls.attachFile) chatEls.attachFile.addEventListener('click', () => pickAttach('file'));
+if (chatEls.attachFolder) chatEls.attachFolder.addEventListener('click', () => pickAttach('folder'));
 
 chatEls.form.addEventListener('submit', (event) => {
   event.preventDefault();
@@ -831,7 +929,7 @@ chatEls.messages.addEventListener('click', async (event) => {
     try {
       await navigator.clipboard.writeText(text);
       const note = li.querySelector('.chat-note-status');
-      if (note) note.textContent = draft ? '已复制笔记草稿' : '已复制对话';
+      if (note) note.textContent = draft ? ChatI18n.t('chat.copied.note') : ChatI18n.t('chat.copied.chat');
     } catch {
       /* 剪贴板不可用就忽略 */
     }
@@ -877,6 +975,15 @@ window.bujo.onChatDelta(({ requestId, text }) => {
     /* 忽略 */
   }
 })();
+
+// 界面语言变化：重新读设置（默认系统提示词按语言自动跟随）并刷新状态行
+ChatI18n.onChange(async () => {
+  try {
+    chatState.settings = await window.bujo.getSettings();
+    updateChatStatus();
+    fillSettingsIfOpen();
+  } catch { /* 设置读不到就保持现状 */ }
+});
 
 /** 取一行能扛住 Markdown 渲染的探针文本（去掉列表符号、标题号） */
 function probeLine(text) {
@@ -1108,5 +1215,26 @@ window.__bujoSmokeTestFallback = async (expectReply) => {
       journal: ((li.querySelector('.chat-journal-body') || {}).textContent || '').replace(/\s+/g, ' ').slice(0, 40),
       actions: Array.from(li.querySelectorAll('button[data-action]')).map((b) => b.dataset.action)
     }))
+  };
+};
+
+/** 自检入口：手动附带的参考文件（绕过系统对话框直接给路径）：发一条消息，返回附带的核对结果与 chips 数 */
+window.__bujoSmokeTestAttach = async (paths) => {
+  setAttachChips((paths || []).map((p) => ({ path: p, name: p.split(/[\/]/).pop() })));
+  chatEls.target.value = 'current';
+  chatEls.context.value = 'current';
+  chatEls.input.value = '这几篇笔记里都有什么？';
+  chatEls.form.requestSubmit();
+
+  const deadline = Date.now() + 8000;
+  while (chatState.streaming && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  const assistant = chatState.messages.filter((m) => m.role === 'assistant').pop();
+  return {
+    ok: Boolean(assistant),
+    context: assistant && assistant.context,
+    chipCount: chatEls.chips.children.length,
+    attached: chatState.attachedFiles.map((f) => f.name)
   };
 };

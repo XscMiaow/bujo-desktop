@@ -113,6 +113,10 @@
   var RESERVED_KIND_RE = /^(total|progress)$/; // 与统计条目的预设计数键冲突，不能当 kind
   var RESERVED_GLYPH_RE = /^[o•·○]$/i; // 与内置事件/任务的原生符号冲突，不收
 
+  // 迁移关联标记（主进程写到行尾的 HTML 注释：bujo:to / bujo:from）：文件里保留，正文里剥掉，
+  // 界面显示/操作/去重看到的都是干净的正文内容
+  var MOVED_MARKER_RE = /[ \t]*<!--[ \t]*bujo:(?:from|to)[ \t][^>]*-->/g;
+
   function glyphRegex(glyph) {
     // 单字符直接上行首匹配；用捕获组拿缩进与正文
     return new RegExp('^([ \\t]*)' + glyph.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '[ \\t]+(.*)$');
@@ -193,42 +197,52 @@
   function parseBulletLine(line) {
     if (typeof line !== 'string' || line.trim() === '') return null;
 
+    var parsed = null;
     var m = NATIVE_RE.exec(line);
     if (m) {
-      return { kind: 'task', text: m[3].trim(), indent: indentWidth(m[1]) };
+      parsed = { kind: 'task', text: m[3].trim(), indent: indentWidth(m[1]) };
     }
 
-    // 插件的自定义原生符号（◐ 日记 之类）：和 o 事件同位匹配
-    for (var ci = 0; ci < customNative.length; ci++) {
-      m = customNative[ci].re.exec(line);
-      if (m) {
-        return { kind: customNative[ci].kind, text: m[2].trim(), indent: indentWidth(m[1]) };
-      }
-    }
-
-    m = LIST_RE.exec(line);
-    if (m) {
-      var body = m[3];
-      var box = CHECKBOX_RE.exec(body);
-      if (box) {
-        var split = splitBoxMark(box[1]);
-        if (split) {
-          var kind = CHECKBOX_TO_KIND[split.mark];
-          var parsed = { kind: kind, text: box[3].trim(), indent: indentWidth(m[1]) };
-          if (kind === 'cancelled') parsed.prior = CANCEL_PRIOR[split.mark] || 'task';
-          if (split.priority) parsed.priority = true;
-          return parsed;
+    if (!parsed) {
+      // 插件的自定义原生符号（◐ 日记 之类）：和 o 事件同位匹配
+      for (var ci = 0; ci < customNative.length; ci++) {
+        m = customNative[ci].re.exec(line);
+        if (m) {
+          parsed = { kind: customNative[ci].kind, text: m[2].trim(), indent: indentWidth(m[1]) };
+          break;
         }
       }
-      return { kind: 'note', text: body.trim(), indent: indentWidth(m[1]) };
     }
 
-    m = EVENT_RE.exec(line);
-    if (m) {
-      return { kind: 'event', text: m[2].trim(), indent: indentWidth(m[1]) };
+    if (!parsed) {
+      m = LIST_RE.exec(line);
+      if (m) {
+        var body = m[3];
+        var box = CHECKBOX_RE.exec(body);
+        if (box) {
+          var split = splitBoxMark(box[1]);
+          if (split) {
+            var kind = CHECKBOX_TO_KIND[split.mark];
+            parsed = { kind: kind, text: box[3].trim(), indent: indentWidth(m[1]) };
+            if (kind === 'cancelled') parsed.prior = CANCEL_PRIOR[split.mark] || 'task';
+            if (split.priority) parsed.priority = true;
+          }
+        }
+        if (!parsed) parsed = { kind: 'note', text: body.trim(), indent: indentWidth(m[1]) };
+      }
     }
 
-    return null;
+    if (!parsed) {
+      m = EVENT_RE.exec(line);
+      if (m) {
+        parsed = { kind: 'event', text: m[2].trim(), indent: indentWidth(m[1]) };
+      }
+    }
+
+    if (!parsed) return null;
+    // 正文剥掉行尾的迁移关联标记（原始行仍由主进程 setMark 原样维护）
+    if (parsed.text !== undefined) parsed.text = parsed.text.replace(MOVED_MARKER_RE, '').trim();
+    return parsed;
   }
 
   function indentWidth(whitespace) {

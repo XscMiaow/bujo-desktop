@@ -174,11 +174,11 @@ test('CLI move：推迟/迁移到 journals 年/月 目标，原文保留', { tim
   const monthly = JSON.parse(run(['move', file, '写周报', '--to', 'next-month', '--json'], { env }));
   assert.equal(monthly.ok, true);
   assert.equal(monthly.destinationKind, 'nextMonth');
-  assert.match(monthly.after, /^- \[>\] 写周报$/, '原文就地标 [>]');
+  assert.match(monthly.after, /^- \[>\] 写周报 <!-- bujo:to .+ -->$/, '原文就地标 [>]（行尾带去向标记）');
 
   const postponed = JSON.parse(run(['move', file, '优先改稿', '--to', 'tomorrow', '--json'], { env }));
   assert.equal(postponed.destinationKind, 'tomorrow');
-  assert.match(postponed.after, /^- \[<!\] 优先改稿$/, '推迟标 [<] 且优先标志不丢');
+  assert.match(postponed.after, /^- \[<!\] 优先改稿 <!-- bujo:to .+ -->$/, '推迟标 [<] 且优先标志不丢');
 
   // 两个文件都在目标里：月度记录有写周报，某篇日记里有优先改稿
   const sheets = [];
@@ -205,7 +205,7 @@ test('CLI move：推迟/迁移到 journals 年/月 目标，原文保留', { tim
   run(['mark', file, '写周报', '--mark', 'task', '--json'], { env });
   const remigrate = JSON.parse(run(['move', file, '写周报', '--to', 'future', '--json'], { env }));
   assert.equal(remigrate.ok, true, '取消迁移后可以把它迁去其他日志');
-  assert.match(remigrate.after, /^- \[>\] 写周报$/, '重启后的迁移同样就地标 [>]');
+  assert.match(remigrate.after, /^- \[>\] 写周报 <!-- bujo:to .+ -->$/, '重启后的迁移同样就地标 [>]');
 });
 
 test('CLI 帮助与未知命令', { timeout: 30000 }, () => {

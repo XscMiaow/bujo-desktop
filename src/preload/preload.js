@@ -73,6 +73,12 @@ contextBridge.exposeInMainWorld('bujo', {
   /** 插件列表：plugins/ 文件夹里带插件清单的子文件夹 → { plugins, errors } */
   listPlugins: () => ipcRenderer.invoke('plugins:list'),
 
+  /** 原文编辑器整篇保存：{ ok, path, name, size } */
+  saveNote: (filePath, content) => ipcRenderer.invoke('note:save', { filePath, content }),
+
+  /** 聊天「添加参考文件/文件夹」：弹系统对话框，返回主进程核对过白名单的 { files, errors } */
+  pickChatContext: (kind) => ipcRenderer.invoke('chat:pick-context', kind),
+
   /** 清除已保存的 API Key */
   clearApiKey: () => ipcRenderer.invoke('settings:clear-key'),
 

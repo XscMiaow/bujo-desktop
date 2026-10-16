@@ -24,6 +24,7 @@
         <div class="segmented" role="group" aria-label="显示模式">
           <button id="view-preview" class="seg active" type="button" data-i18n="view.preview">预览</button>
           <button id="view-source" class="seg" type="button" data-i18n="view.source">原文</button>
+          <button id="view-tasks" class="seg" type="button" data-i18n="view.tasks" data-i18n-title="view.tasks.title">每日任务</button>
         </div>
         <button id="chat-toggle" class="btn" type="button" data-i18n="toolbar.chat" data-i18n-title="toolbar.chatToggle.title">AI 聊天</button>
         <button id="floating-toggle" class="btn" type="button" data-i18n="toolbar.floating" data-i18n-title="toolbar.floating.title">悬浮小窗</button>
@@ -85,11 +86,14 @@
         </div>
 
         <form class="chat-composer" id="chat-form">
+          <div class="chat-attach-chips" id="chat-attach-chips" hidden></div>
           <div class="chat-input-row">
             <textarea id="chat-input" rows="3" data-i18n-placeholder="chat.input.placeholder" placeholder="问点什么…（Enter 发送，Shift + Enter 换行）"></textarea>
             <button id="chat-send" class="btn primary chat-send" type="submit" data-i18n="chat.send">发送</button>
           </div>
           <div class="chat-composer-row">
+            <button id="chat-attach-file" class="icon-btn" type="button" data-i18n-title="chat.attach.file" aria-label="添加参考文件">📎</button>
+            <button id="chat-attach-folder" class="icon-btn" type="button" data-i18n-title="chat.attach.folder" aria-label="添加参考文件夹">📁</button>
             <label class="chat-target">
               <span data-i18n="chat.target.label">记入</span>
               <select id="chat-target">

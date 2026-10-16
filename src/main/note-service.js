@@ -31,6 +31,38 @@ const BULLET_MARKS = {
   p: 'unchanged' // 只去掉优先标志，基础标记不变（界面「去★」按钮）
 };
 
+/* ---------------- 迁移关联标记（源行 ⇆ 目标副本的迁移链） ----------------
+ *
+ * 迁移写入目标日志时，双方行尾各带一条 HTML 注释标记（其余工具照常读 Markdown）：
+ *   源行   - [>] 买牛奶 <!-- bujo:to   <目标文件绝对路径> -->
+ *   目标行 - [ ] 买牛奶 <!-- bujo:from <源文件绝对路径> -->
+ * 取消迁移/取消推迟时靠它精确找回当初写过去的副本并收掉；
+ * 正文匹配与去重都会把这类标记剥掉（见 note-edit.normalizeForMatch），界面上注释也不可见。
+ */
+const MOVED_MARKER_RE = /[ \t]*<!--[ \t]*bujo:(?:from|to)[ \t][^>]*-->/g;
+
+/** 一条迁移标记：kind 是 'to'（写在源行）或 'from'（写在目标副本）；value 是对方文件的绝对路径 */
+function movedMarker(kind, value) {
+  return `<!-- bujo:${kind} ${value} -->`;
+}
+
+/** 去掉行里的迁移标记，只留正文（正文比对用） */
+function stripMovedMarkers(text) {
+  return String(text == null ? '' : text).replace(MOVED_MARKER_RE, '').trimEnd();
+}
+
+/** 行里的「to」标记（迁到哪儿了）；没有则 null */
+function movedToOf(line) {
+  const match = /<!--[ \t]*bujo:to[ \t]([^>]*?)-->/.exec(String(line || ''));
+  return match ? match[1].trim() : null;
+}
+
+/** 行里的「from」标记（从哪儿迁来的）；没有则 null */
+function movedFromOf(line) {
+  const match = /<!--[ \t]*bujo:from[ \t]([^>]*?)-->/.exec(String(line || ''));
+  return match ? match[1].trim() : null;
+}
+
 /** 目标路径是否在某个目录内（用于把写入限制在日记目录里） */
 function isInsideDirectory(childPath, dirPath) {
   if (!childPath || !dirPath) return false;
@@ -194,7 +226,7 @@ async function setBulletMark(filePath, target = {}) {
   if (!wanted) throw new Error('这一条没有可比对的内容');
 
   // 队列 + 锁：与 append/integrate 同一套入口，应用与 CLI 完全一致
-  return submit(() =>
+  const result = await submit(() =>
     withFileLock(resolved, async () => {
       // 锁内重新读全文：别的进程可能刚改过这个文件，行号随时会变
       const source = (await readNote(resolved)).replace(/\r\n?/g, '\n');
@@ -222,8 +254,18 @@ async function setBulletMark(filePath, target = {}) {
       if (mark === '+') {
         markToUse = '+!';
       }
-      const after = setMark(before, markToUse);
+      let after = setMark(before, markToUse);
       if (!after) throw new Error('这一条没有可比对的内容');
+
+      // 取消迁移 / 取消推迟：行尾的去向标记（bujo:to …）不再是复发信息，从正文里剥掉；
+      // 目标日志里的副本在本锁之外回收（见 cleanupMigratedCopy）
+      let cleanupPlan = null;
+      if (mark === ' ' && (parsed.kind === 'migrated' || parsed.kind === 'scheduled')) {
+        const to = movedToOf(before);
+        cleanupPlan = to ? { destPath: path.resolve(to), sourcePath: resolved, sourceLine: before } : null;
+        const stripped = stripMovedMarkers(after);
+        if (stripped) after = stripped;
+      }
 
       const info = {
         path: resolved,
@@ -233,13 +275,24 @@ async function setBulletMark(filePath, target = {}) {
         after,
         state: BULLET_MARKS[markToUse] || BULLET_MARKS[mark]
       };
-      if (after === before) return { ...info, changed: false };
+      if (after === before) return { ...info, changed: false, cleanupPlan };
 
       lines[index] = after;
       const written = await writeNote(resolved, `${lines.join('\n')}\n`);
-      return { ...info, changed: true, size: written.size };
+      return { ...info, changed: true, size: written.size, cleanupPlan };
     })
   );
+
+  if (result.cleanupPlan) {
+    const plan = result.cleanupPlan;
+    delete result.cleanupPlan;
+    try {
+      result.destCleanup = await cleanupMigratedCopy(plan);
+    } catch (err) {
+      result.destCleanup = { removed: false, error: err.message };
+    }
+  }
+  return result;
 }
 
 /**
@@ -283,10 +336,6 @@ async function moveBullet(sourcePath, destPath, params = {}) {
       const before = lines[index];
       const parsed = parseBulletLine(before);
       if (!parsed) throw new Error('这一行已经不是条目了，已重新载入');
-
-      // 迁移的规矩：已迁移（[>]）/已划去/已完成的条目不能再从原地搬一次，
-      // 先「取消迁移/恢复」回到普通状态，再搬；目标日志里的副本自己再迁一次，
-      // 就等于把这件事重新迁到新的位置（重新迁移旧项目），不受这里限制
       if (parsed.kind === 'migrated') {
         throw new Error('已迁移（[>]）的条目不能继续迁移，请先「取消迁移」再搬');
       }
@@ -297,24 +346,29 @@ async function moveBullet(sourcePath, destPath, params = {}) {
         throw new Error('已完成的条目不能迁移，先取消完成再搬');
       }
 
-      // 目标条目：同一件事「重开」为未完成态，类型与优先保持
+      // 目标条目：同一件事「重开」为未完成态，类型与优先保持；
+      // 副本行尾带 from 标记，取消迁移/取消推迟时能精确找回并收掉
+      const cleanBefore = stripMovedMarkers(before);
       const priorKind = parsed.kind;
       const destBase = priorKind === 'note' ? 'n' : priorKind === 'event' ? 'e' : ' ';
-      const plain = setMark(before, destBase); // 恢复为未完成（保留优先 → [!]/[n!]/[e!]）
-      const destLine = parsed.priority ? setMark(plain, '+!') : plain;
-      if (!destLine) throw new Error('这一条没有可比对的内容');
+      const plain = setMark(cleanBefore, destBase); // 恢复为未完成（保留优先 → [!]/[n!]/[e!]）
+      const destOpen = parsed.priority ? setMark(plain, '+!') : plain;
+      if (!destOpen) throw new Error('这一条没有可比对的内容');
 
       return {
         index,
         before,
         priorKind,
-        after: setMark(before, movedMark),
-        destLine
+        // 源行：就地标 [>]/[<]（优先随标记走），并带「去哪儿了」的 to 标记
+        after: `${setMark(cleanBefore, movedMark)} ${movedMarker('to', dest)}`.trim(),
+        destLine: `${destOpen} ${movedMarker('from', source)}`.trim()
       };
     }))
   );
 
-  // 2) 写目标日记：先去重算出 accepted，再插到对应小节（任务/笔记）下；路径外部已建好
+  // 2) 写目标日记：整合规则写入（改状态/去重后再追加）。
+  //    写入不再按「任务/笔记」小节找插入点（那条规则已被去掉）：统一追加到文件末尾，
+  //    同一件事靠内容去重保证在目标日志里只出现一份。
   const destResult = await submit(() =>
     withFileLock(dest, async () => {
       let existing = '';
@@ -324,31 +378,10 @@ async function moveBullet(sourcePath, destPath, params = {}) {
         if (!/不存在/.test(err.message)) throw err; // 目标被外部删掉了：当作空文件重建
       }
 
-      const { report } = integrate(existing.trimEnd(), { lines: [plan.destLine], dedupe: true });
+      const { text, report } = integrate(existing.trimEnd(), { lines: [plan.destLine], dedupe: true });
       const destName = path.basename(dest);
       if (!report.added.length && !report.merged.length && !report.edits.applied.length) {
         return { destName, destChanged: false, destAdded: 0, destReport: report };
-      }
-
-      // 合并改动（目标里已有同内容的划去条目等）:直接用 integrate 的结果
-      if (report.merged.length || report.edits.applied.length) {
-        const { text } = integrate(existing.trimEnd(), { lines: [plan.destLine], dedupe: true });
-        const written = await writeNote(dest, text);
-        return { destName: written.name, destChanged: true, destAdded: written.size, destReport: report };
-      }
-
-      // 纯新增：插进对应小节（任务/笔记）里，没有对应小节才追加到末尾
-      const priorKind = plan.priorKind;
-      const wantedLabel = priorKind === 'note' || priorKind === 'event' ? '笔记' : '任务';
-      const lines = existing.replace(/\r\n?/g, '\n').replace(/\s+$/, '').split('\n');
-      const plan2 = insertionUnderSection(lines, wantedLabel);
-      let text;
-      if (plan2.mode === 'end' || !lines.length) {
-        const { text: appended } = integrate(existing.trimEnd(), { lines: [plan.destLine], dedupe: true });
-        text = appended;
-      } else {
-        lines.splice(plan2.insertAt, 0, plan.destLine);
-        text = `${lines.join('\n')}\n`;
       }
       const written = await writeNote(dest, text);
       return { destName: written.name, destChanged: true, destAdded: written.size, destReport: report };
@@ -366,8 +399,12 @@ async function moveBullet(sourcePath, destPath, params = {}) {
       if (!valid) index = locateBullet(lines, wanted);
 
       const before = lines[index];
-      const after = normalizeForMatch(before) === wanted ? setMark(before, movedMark) : '';
-      if (!after) throw new Error('这一条没有可比对的内容（源文件刚被改过，已重新载入）');
+      // 正文比对时剥旧迁移标记（正文没变就是同一条）；写回前总是先把老标记拿掉
+      if (normalizeForMatch(stripMovedMarkers(before)) !== wanted) {
+        throw new Error('这一条没有可比对的内容（源文件刚被改过，已重新载入）');
+      }
+      // 就地标 [>]/[<]，并写上当前目的地（旧迁移/推迟的 to 标记换成这一次的）
+      const after = `${setMark(stripMovedMarkers(before), movedMark)} ${movedMarker('to', dest)}`.trim();
 
       const info = {
         path: source,
@@ -390,31 +427,60 @@ async function moveBullet(sourcePath, destPath, params = {}) {
 }
 
 /**
- * 在「任务 / 笔记」小节的末尾插入新条目的位置；没有这个小节或者条目相关的都不是标题时回退末尾追加。
- * @param {string[]} lines
- * @param {string} wantedLabel '任务' 或 '笔记'
- * @returns {{ mode: 'section'|'end', insertAt?: number }}
+ * 取消迁移 / 取消推迟：把当初写进目标日志的那份原样副本收回来。
+ *
+ * 只收「与迁入时一致的」副本：正文相同且仍期未完成态（[ ]/笔记/事件，优先可带）；
+ * 用户已在目标日志里动过（完成/划去/再迁移）的副本原地保留——
+ * 那是已经进行中的事，不该被回退悄悄抹掉。找不到精确对应（老版本迁移或正文被改）保持原状。
+ *
+ * @param {{ destPath:string, sourcePath:string, sourceLine:string }} spec
+ * @returns {Promise<{ removed:boolean, reason?:string }>}
  */
-function insertionUnderSection(lines, wantedLabel) {
-  const headingRe = /^\s*#{1,6}\s+\S/;
-  let headerIndex = -1;
-  for (let i = 0; i < lines.length; i++) {
-    if (!headingRe.test(lines[i])) continue;
-    if (normalizeForMatch(lines[i]) === wantedLabel) {
-      headerIndex = i;
-      break;
-    }
-  }
-  if (headerIndex === -1) return { mode: 'end' };
+async function cleanupMigratedCopy({ destPath, sourcePath, sourceLine }) {
+  const resolved = assertWritable(destPath);
+  const sourceResolved = path.resolve(sourcePath);
+  const wanted = normalizeForMatch(stripMovedMarkers(sourceLine));
+  if (!wanted) return { removed: false, reason: '源条目没有可比对的正文' };
 
-  let insertAt = headerIndex + 1; // 标题下紧跟一行空白或标题前都可行
-  for (let i = headerIndex + 1; i < lines.length; i++) {
-    if (headingRe.test(lines[i])) break;
-    if (lines[i].trim() !== '') insertAt = i + 1;
-  }
-  /* 把插入点之前紧挨着的空行收掉：别在标题后额外堆一排空行 */
-  while (insertAt > headerIndex + 1 && lines[insertAt - 1] === '') insertAt--;
-  return { mode: 'section', insertAt };
+  return submit(() =>
+    withFileLock(resolved, async () => {
+      const raw = await readNote(resolved);
+      const lines = raw.replace(/\r\n?/g, '\n').replace(/\s+$/, '').split('\n');
+
+      const withMarker = [];
+      const byContent = [];
+      lines.forEach((line, index) => {
+        if (!parseBulletLine(line)) return;
+        const from = movedFromOf(line);
+        if (from && path.resolve(from).toLowerCase() === sourceResolved.toLowerCase()) {
+          withMarker.push(index);
+        } else if (normalizeForMatch(stripMovedMarkers(line)) === wanted) {
+          byContent.push(index);
+        }
+      });
+
+      // 有 from 标记就认标记；认不到时按内容兜底（同一件事在目标里至多一份，否则不敢动）
+      const pool = withMarker.length ? withMarker : byContent;
+      if (pool.length === 0) return { removed: false, reason: '目标日志里没有找到当初的副本' };
+      if (pool.length > 1) return { removed: false, reason: '目标日志里有多个相似条目，不敢自动删' };
+
+      const index = pool[0];
+      const current = lines[index];
+      const currentParsed = parseBulletLine(current);
+      // 已被用户动过条目状态（完成/划去/再迁移）的副本不是原样迁入的，原地保留
+      const unchanged =
+        ['task', 'note', 'event'].includes(currentParsed.kind) &&
+        normalizeForMatch(stripMovedMarkers(current)) === wanted;
+      if (!unchanged) {
+        return { removed: false, reason: `目标日志里的副本已是「${currentParsed.kind}」，原地保留` };
+      }
+
+      lines.splice(index, 1);
+      const next = `${lines.join('\n')}\n`;
+      await writeNote(resolved, next);
+      return { removed: true };
+    })
+  );
 }
 
 module.exports = {

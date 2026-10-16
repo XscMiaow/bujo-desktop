@@ -15,7 +15,8 @@ const {
   ensureMoveDestination,
   migrateFlatJournals
 } = require('./journal-service');
-const { appendToNote, readNote, integrateNoteFile, setBulletMark, moveBullet, isInsideDirectory } = require('./note-service');
+const { appendToNote, readNote, writeNote, integrateNoteFile, setBulletMark, moveBullet, isInsideDirectory } = require('./note-service');
+const { submit, withFileLock } = require('./write-queue');
 const { SettingsService, DEFAULT_SETTINGS, LEGACY_SYSTEM_PROMPTS } = require('./settings-service');
 const { listThemes, isValidThemeId } = require('./theme-service');
 const { listPlugins } = require('./plugin-service');
@@ -140,10 +141,13 @@ function resolveContextNote(spec) {
 /**
  * 把笔记原文附到本轮请求的最后一条用户消息后面，并返回「附了什么」供界面核对。
  * 只改这一次请求的副本：聊天历史里仍然只存用户自己说的话。
+ *
+ * options.extraFiles：用户在聊天里手动添加的参考文件/文件夹（主进程已核对过白名单）。
+ * 每个文件单独一个 <note file="…"> 块，总量受 EXTRA_TOTAL_MAX 限制。
  */
-async function attachNoteContext(history, spec) {
-  const info = { requested: Boolean(spec), included: false, name: null, chars: 0, truncated: false, reason: '' };
-  if (!spec) return info;
+async function attachNoteContext(history, spec, options = {}) {
+  const info = { requested: Boolean(spec), included: false, name: null, chars: 0, truncated: false, reason: '', files: [] };
+  if (!spec && !(Array.isArray(options.extraFiles) && options.extraFiles.length)) return info;
 
   const last = history[history.length - 1];
   if (!last || last.role !== 'user' || typeof last.content !== 'string') {
@@ -152,26 +156,96 @@ async function attachNoteContext(history, spec) {
   }
 
   const target = resolveContextNote(spec);
-  if (!target) {
+  if (spec && !target) {
     info.reason = '这份笔记不在可读范围内';
-    return info;
   }
-  info.name = target.name;
 
-  try {
-    const content = await readNote(target.path);
-    const built = buildNoteContext({ name: target.name, content, maxChars: NOTE_CONTEXT_MAX });
-    info.included = built.included;
-    info.chars = built.chars;
-    info.total = built.total;
-    info.truncated = built.truncated;
-    info.reason = built.reason;
-    if (built.included) last.content = `${last.content}\n\n${built.text}`;
-  } catch (err) {
-    info.reason = err && /不存在/.test(err.message) ? '这篇笔记还没建' : `笔记读取失败：${err.message}`;
+  const extraTargets = [];
+  const extraSeen = new Set();
+  let extraCharsLeft = EXTRA_TOTAL_MAX;
+  for (const raw of Array.isArray(options.extraFiles) ? options.extraFiles : []) {
+    if (typeof raw !== 'string' || !raw.trim()) continue;
+    try {
+      const resolved = assertWritableTarget(raw);
+      if (extraSeen.has(resolved.toLowerCase())) continue;
+      extraSeen.add(resolved.toLowerCase());
+      extraTargets.push({ path: resolved, name: path.basename(resolved) });
+      if (extraTargets.length >= EXTRA_FILES_MAX) break;
+    } catch (err) {
+      info.files.push({ name: path.basename(String(raw)), path: String(raw), included: false, reason: err.message });
+    }
+  }
+
+  // 主笔记 + 额外文件按同一套规则拼块，附在最后一条用户消息后面
+  const attachTargets = [];
+  if (target) attachTargets.push({ ...target, isPrimary: true });
+  extraTargets.forEach((item) => attachTargets.push({ ...item, isPrimary: false }));
+
+  for (const item of attachTargets) {
+    try {
+      const content = await readNote(item.path);
+      const maxChars = item.isPrimary ? NOTE_CONTEXT_MAX : Math.min(EXTRA_FILE_CONTEXT_MAX, extraCharsLeft);
+      const built = buildNoteContext({ name: item.name, content, maxChars });
+      if (!item.isPrimary) extraCharsLeft = Math.max(0, extraCharsLeft - built.chars);
+      const entry = {
+        name: item.name,
+        path: item.path,
+        included: built.included,
+        chars: built.chars,
+        truncated: built.truncated,
+        reason: built.reason || ''
+      };
+      info.files.push(entry);
+      if (item.isPrimary) {
+        info.included = built.included;
+        info.name = item.name;
+        info.chars = built.chars;
+        info.total = built.total;
+        info.truncated = built.truncated;
+        info.reason = built.reason;
+      } else {
+        info.included = info.included || built.included;
+      }
+      if (built.included) last.content = `${last.content}\n\n${built.text}`;
+    } catch (err) {
+      const reason = err && /不存在/.test(err.message) ? '这篇笔记还没建' : `笔记读取失败：${err.message}`;
+      info.files.push({ name: item.name, path: item.path, included: false, reason });
+      if (item.isPrimary) info.reason = reason;
+    }
   }
 
   return info;
+}
+
+/** 追加参考文件的上下文预算：每个文件最多带多少字、最多几个、总共多少 */
+const EXTRA_FILE_CONTEXT_MAX = 2400;
+const EXTRA_FILES_MAX = 6;
+const EXTRA_TOTAL_MAX = 9000;
+
+/**
+ * 插件注册的自定义子弹摘要（系统提示词用）：坏插件已被扫描隔离，扫描失败也不影响聊天。
+ */
+function pluginBulletSummary() {
+  try {
+    const { plugins } = listPlugins(PLUGINS_DIR);
+    return plugins.flatMap((plugin) => plugin.bullets || []);
+  } catch {
+    return [];
+  }
+}
+
+/** 递归收一个文件夹里的 Markdown（只用于日记目录内的文件夹，路径在主进程里解析） */
+function listMarkdownUnder(dir) {
+  const out = [];
+  const walk = (current) => {
+    for (const entry of fs.readdirSync(current, { withFileTypes: true })) {
+      const full = path.join(current, entry.name);
+      if (entry.isDirectory()) walk(full);
+      else if (entry.isFile() && MARKDOWN_EXTENSIONS.has(path.extname(entry.name).toLowerCase())) out.push(full);
+    }
+  };
+  walk(dir);
+  return out;
 }
 
 /** 正在进行的聊天请求，用于取消 */
@@ -446,8 +520,53 @@ function registerIpcHandlers() {
 
   // ---------------- AI 聊天 ----------------
 
+  // 聊天「添加文件/文件夹」：弹系统对话框选拍参考文件；只收白名单里（日记目录内或本次会话打开过）的
+  ipcMain.handle('chat:pick-context', async (event, kind) => {
+    const wantFolder = kind === 'folder';
+    const win = BrowserWindow.fromWebContents(event.sender);
+    if (!win) return { ok: false, error: '找不到窗口' };
+    const result = wantFolder
+      ? await dialog.showOpenDialog(win, { title: '添加参考文件夹（日记目录内）', properties: ['openDirectory'] })
+      : await dialog.showOpenDialog(win, {
+          title: '添加参考文件',
+          properties: ['openFile', 'multiSelections'],
+          filters: [
+            { name: 'Markdown 笔记', extensions: [...MARKDOWN_EXTENSIONS].map((e) => e.replace('.', '')) },
+            { name: '所有文件', extensions: ['*'] }
+          ]
+        });
+    if (result.canceled || !result.filePaths.length) return { ok: true, canceled: true, files: [], errors: [] };
+
+    const files = [];
+    const errors = [];
+    for (const filePath of result.filePaths) {
+      try {
+        const resolved = path.resolve(filePath);
+        const stat = fs.statSync(resolved);
+        const candidates = [];
+        if (stat.isDirectory()) {
+          if (!isInsideDirectory(resolved, journalsDir())) {
+            throw new Error('只能添加日记目录内的文件夹（外面的文件/文件夹先打开过也可以单独选）');
+          }
+          candidates.push(...listMarkdownUnder(resolved));
+          if (!candidates.length) throw new Error('这个文件夹里没有 Markdown 笔记');
+        } else {
+          candidates.push(resolved);
+        }
+        for (const candidate of candidates) {
+          assertWritableTarget(candidate); // 白名单：日记目录内或本次会话打开过
+          files.push({ path: candidate, name: path.basename(candidate) });
+          if (files.length >= EXTRA_FILES_MAX) return { ok: true, canceled: false, files, errors: [...errors, `最多一次附 ${EXTRA_FILES_MAX} 个文件，后面的没收下`] };
+        }
+      } catch (err) {
+        errors.push(`${path.basename(filePath)}：${err.message}`);
+      }
+    }
+    return { ok: true, canceled: false, files, errors };
+  });
+
   ipcMain.handle('chat:send', async (event, payload = {}) => {
-    const { requestId, messages, noteContext } = payload;
+    const { requestId, messages, noteContext, extraFiles } = payload;
     const config = getSettings().getForRequest();
     const controller = new AbortController();
     if (requestId) activeChats.set(requestId, controller);
@@ -458,7 +577,7 @@ function registerIpcHandlers() {
       .map((message) => ({ role: message.role, content: message.content }));
 
     // 把已有笔记当上下文附在最后一条用户消息后面（笔记里已经记过什么，模型才看得见）
-    const context = await attachNoteContext(history, noteContext);
+    const context = await attachNoteContext(history, noteContext, { extraFiles });
 
     const request = {
       baseUrl: config.baseUrl,
@@ -466,8 +585,15 @@ function registerIpcHandlers() {
       model: config.model,
       temperature: config.temperature,
       signal: controller.signal,
-      // 系统提示词后面总会追加三段式协议，让模型分别给出对话、新增条目与笔记改动
-      messages: [{ role: 'system', content: buildSystemPrompt(config.systemPrompt) }, ...history],
+      // 系统提示词后面总会追加三段式协议，让模型分别给出对话、新增条目与笔记改动；
+      // 语言跟界面语言走，插件的子弹符号也会写进符号清单（模型才认识插件的自定义类型）
+      messages: [{
+        role: 'system',
+        content: buildSystemPrompt(config.systemPrompt, {
+          locale: config.locale,
+          customBullets: pluginBulletSummary()
+        })
+      }, ...history],
       onDelta: (text) => {
         if (requestId && !event.sender.isDestroyed()) event.sender.send('chat:delta', { requestId, text });
       }
@@ -538,6 +664,18 @@ function registerIpcHandlers() {
 
       const result = await appendToNote(resolved, markdown, { createIfMissing: target === 'daily' });
       return { ok: true, ...result, report: null };
+    } catch (err) {
+      return { ok: false, error: err.message };
+    }
+  });
+
+  // 原文编辑器整篇保存：渲染层 textarea 编辑后的全文写回（与其它写入口共用队列+锁）
+  ipcMain.handle('note:save', async (_event, payload = {}) => {
+    try {
+      const resolved = assertWritableTarget(payload.filePath);
+      if (typeof payload.content !== 'string') throw new Error('没有可保存的内容');
+      const result = await submit(() => withFileLock(resolved, async () => writeNote(resolved, payload.content)));
+      return { ok: true, path: result.path, name: result.name, size: result.size };
     } catch (err) {
       return { ok: false, error: err.message };
     }
@@ -884,8 +1022,37 @@ async function runSmokeTest(win) {
     const chatReport = await runChatSmokeTest(win);
     console.log('SMOKE_CHAT ' + JSON.stringify(chatReport));
 
-    const ok = Boolean(result && result.ok) && fresh && Boolean(chatReport && chatReport.ok);
-    if (!ok) console.error('SMOKE_FAILED 自检未通过（截图不是最新帧，或聊天/写入链路有问题）');
+    // 新能力整链自检：每日任务 / 分组折叠 / 原文编辑器
+    let extra = null;
+    try {
+      extra = await win.webContents.executeJavaScript('window.__bujoSmokeTestExtra()');
+    } catch (err) {
+      extra = { ok: false, error: err.message };
+    }
+    console.log('SMOKE_EXTRA ' + JSON.stringify(extra));
+
+    // 界面语言 → 系统提示词：切英文后设置里的默认提示词换成英文那句，切回中文恢复
+    let localePrompt = null;
+    try {
+      localePrompt = await win.webContents.executeJavaScript(
+        '(async () => {' +
+        '  const before = (await window.bujo.getSettings()).systemPrompt;' +
+        '  await window.bujo.saveSettings({ locale: "en" });' +
+        '  const en = (await window.bujo.getSettings()).systemPrompt;' +
+        '  await window.bujo.saveSettings({ locale: "zh-CN" });' +
+        '  const back = (await window.bujo.getSettings()).systemPrompt;' +
+        '  return { ok: en !== before && en.indexOf("Bullet Journal assistant") !== -1 && back === before, enStart: en.slice(0, 48) };' +
+        '})()'
+      );
+    } catch (err) {
+      localePrompt = { ok: false, error: err.message };
+    }
+    console.log('SMOKE_LOCALE_PROMPT ' + JSON.stringify(localePrompt));
+
+    const ok =
+      Boolean(result && result.ok) && fresh && Boolean(chatReport && chatReport.ok) &&
+      Boolean(extra && extra.ok) && Boolean(localePrompt && localePrompt.ok);
+    if (!ok) console.error('SMOKE_FAILED 自检未通过（截图不是最新帧，或聊天/写作链路/新增能力有问题）');
     app.exit(ok ? 0 : 1);
   } catch (err) {
     console.error('SMOKE_FAILED ' + err.message);
@@ -907,6 +1074,12 @@ function lastUserMessage(requests) {
   if (!last) return '';
   const user = [...last.messages].reverse().find((message) => message.role === 'user');
   return user && typeof user.content === 'string' ? user.content : '';
+}
+
+/** 自检：附带文件清单的名字都在（没多没少） */
+function attachedNamesOK(attach, names) {
+  const attached = (attach && attach.attached) || [];
+  return attached.length === names.length && names.every((name) => attached.includes(name));
 }
 
 /**
@@ -1059,7 +1232,8 @@ async function runMarksSmoke(win, fs) {
       sourceMarked: /- \[<\] 买牛奶/.test(moved) && /- \[>\] 整理收件箱/.test(moved),
       nothingDeletedPostMove: moved.replace(/\s+$/, '').split('\n').length === beforeLines.length,
       tomorrowDaily: fs.existsSync(tomorrowPath) && fs.readFileSync(tomorrowPath, 'utf8').includes('- [ ] 买牛奶'),
-      monthlyGotNote: Boolean(monthlySheet && monthlySheet.includes('- 整理收件箱')),
+      // 取消迁移会收掉副本：自检此时已走过 remigrate（复原→重迁），目标里应恰好剩一份
+      monthlyGotNote: Boolean(monthlySheet) && (monthlySheet.match(/整理收件箱/g) || []).length === 1,
       remigrate
     };
 
@@ -1184,6 +1358,7 @@ async function runChatSmokeTest(win) {
       hasEditTag: /<note-edit>/.test(sentSystem),
       hasBulletSymbols: ['- [ ] ', '- [>] ', '- [<] ', '- [!] '].every((symbol) => sentSystem.includes(symbol)),
       hasIntegrationRules: ['改：', '完成：', '划去：', '同一件事不要重复'].every((rule) => sentSystem.includes(rule)),
+      hasPluginBullets: sentSystem.includes('插件自定义子弹') && sentSystem.includes('进行中') && sentSystem.includes('- [p]'),
       upgradedFromLegacy: sentSystem.startsWith(DEFAULT_SETTINGS.systemPrompt) && !sentSystem.includes(legacyPrompt),
       length: sentSystem.length
     };
@@ -1200,6 +1375,39 @@ async function runChatSmokeTest(win) {
       reportedName: Boolean(report.context && report.context.name === path.basename(notePath))
     };
     report.ok = report.ok && Object.values(report.contextSent).every(Boolean);
+
+    // 手动附带的参考文件（📎/📁）：当前笔记 + 另一篇临时笔记一起附上，两份内容都应进同一轮上下文
+    const extraNotePath = path.join(os.tmpdir(), `bujo-smoke-attach-${Date.now()}.md`);
+    fs.writeFileSync(extraNotePath, '# 参考文件自检\n\n- [ ] 参考文件里的任务\n', 'utf8');
+    try {
+      // readFile 让主进程把这份文件记进本次会话白名单（跟用户先打开它再 📎 的效果一致）
+      await win.webContents.executeJavaScript(`window.bujo.readFile(${JSON.stringify(extraNotePath)})`);
+      const attach = await win.webContents.executeJavaScript(`window.__bujoSmokeTestAttach(${JSON.stringify([notePath, extraNotePath])})`);
+      const sentUserRound = lastUserMessage(mock.requests);
+      const contextFiles = (attach && attach.context && attach.context.files || []).map((item) => ({
+        name: item && item.name,
+        included: Boolean(item && item.included)
+      }));
+      const fileNames = contextFiles.map((item) => item.name);
+      report.attach = {
+        ok: Boolean(attach && attach.ok && attach.chipCount === 2) &&
+            fileNames.includes(path.basename(notePath)) &&
+            fileNames.includes(path.basename(extraNotePath)) &&
+            contextFiles.every((item) => item.included) &&
+            attach.attached.length === 2 &&
+            sentUserRound.includes('参考文件里的任务'),
+        chipCount: attach && attach.chipCount,
+        files: contextFiles,
+        raw: attach,
+        sentHasExtra: sentUserRound.includes('参考文件里的任务')
+      };
+      report.ok = report.ok && report.attach.ok;
+    } catch (err) {
+      report.attach = { ok: false, error: err.message };
+      report.ok = false;
+    } finally {
+      fs.rmSync(extraNotePath, { force: true });
+    }
 
     // 「参考 / 记入今天的日记」这条路径：只读查询不能顺手把今天的日记建出来
     const dailyFile = dailyJournalPath(journalsDir(), new Date());

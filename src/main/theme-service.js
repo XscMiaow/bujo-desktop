@@ -14,7 +14,11 @@ const BASE_CSS_NAME = 'base.css';
 /** 内置主题的中文显示名；文件夹里出现其它 .css 就用 ID 兜底展示 */
 const THEME_LABELS = {
   dark: '深色',
-  light: '浅色'
+  light: '浅色',
+  'pink-white': '粉白',
+  'pink-dark': '粉黑',
+  'green-white': '绿白',
+  'green-dark': '绿黑'
 };
 
 /**
@@ -42,8 +46,8 @@ function listThemes(stylesDir, fileSystem = fs) {
     // 目录读不到（打包后路径变化等）就给空列表：界面回落到 base 自带的外观
   }
 
-  // 顺序稳定：内置先（dark → light），其它的按 id 排在后面
-  const priority = { dark: 0, light: 1 };
+  // 顺序稳定：dark → light → 粉系 → 绿系 → 其它按 id
+  const priority = { dark: 0, light: 1, 'pink-white': 2, 'pink-dark': 3, 'green-white': 4, 'green-dark': 5 };
   themes.sort((a, b) => {
     const pa = Object.prototype.hasOwnProperty.call(priority, a.id) ? priority[a.id] : 99;
     const pb = Object.prototype.hasOwnProperty.call(priority, b.id) ? priority[b.id] : 99;

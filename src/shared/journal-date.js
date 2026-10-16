@@ -71,10 +71,10 @@
     return monthKey(date);
   }
 
-  /** 年度（未来）记录固定文件名；一年一篇，放在年文件夹里 */
-  const FUTURE_RECORD_FILE = '未来记录.md';
-  /** 月度记录固定文件名；一月一篇，放在月文件夹里 */
-  const MONTHLY_RECORD_FILE = '月度记录.md';
+  /** 年度（未来）记录固定文件名；一年一篇，放在年文件夹里（英文命名；旧中文文件名仍会被识别） */
+  const FUTURE_RECORD_FILE = 'Future Log.md';
+  /** 月度记录固定文件名；一月一篇，放在月文件夹里（英文命名；旧中文文件名仍会被识别） */
+  const MONTHLY_RECORD_FILE = 'Monthly Log.md';
 
   /** 解析 '2026-10' 为这个月 1 号的本地时间 Date，不合法时返回 null */
   function parseMonthKey(text) {
@@ -91,14 +91,16 @@
     return new Date(Number(text), 0, 1);
   }
 
-  /** 2026 年 10 月 */
+  /** 2026 年 10 月（英文：Oct 2026；模板与侧边栏副标题共用） */
   function monthLabel(date) {
-    return `${date.getFullYear()} 年 ${date.getMonth() + 1} 月`;
+    var MONTHS = ['January', 'February', 'March', 'April', 'May', 'June',
+      'July', 'August', 'September', 'October', 'November', 'December'];
+    return `${MONTHS[date.getMonth()]} ${date.getFullYear()}`;
   }
 
-  /** 2026 年 */
+  /** 2026 */
   function yearLabel(date) {
-    return `${date.getFullYear()} 年`;
+    return String(date.getFullYear());
   }
 
   return {

@@ -1747,3 +1747,128 @@ body.is-floating-collapsed #empty-state {
   background: var(--bg-elevated);
   font-size: 16px;
 }
+
+/* ---------- 侧边栏分组折叠（年/月/集子的分组头可点） ---------- */
+
+.journal-group[data-fold-key] {
+  cursor: pointer;
+}
+
+.journal-group .fold-caret {
+  flex: none;
+  width: 12px;
+  color: var(--text-dim);
+  font-size: 9px;
+  opacity: 0.8;
+}
+
+.journal-group[data-fold-key]:hover .fold-caret {
+  color: var(--accent);
+  opacity: 1;
+}
+
+/* ---------- 原文编辑器（source 视图直接编辑 Markdown） ---------- */
+
+.source-editor-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  max-width: 780px;
+  margin: 0 auto 8px;
+}
+
+.source-editor-hint {
+  color: var(--text-dim);
+  font-size: 12px;
+}
+
+.source-editor {
+  display: block;
+  width: 100%;
+  max-width: 780px;
+  margin: 0 auto;
+  min-height: 55vh;
+  padding: 16px 18px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--code-bg);
+  color: var(--code-text);
+  font-family: Consolas, "Cascadia Mono", monospace;
+  font-size: 13px;
+  line-height: 1.65;
+  white-space: pre-wrap;
+  word-break: break-word;
+  resize: vertical;
+  outline: none;
+}
+
+.source-editor:focus {
+  border-color: var(--accent);
+}
+
+/* ---------- 每日任务列表（view-tasks 视图） ---------- */
+
+.daily-tasks {
+  max-width: 780px;
+  margin: 0 auto;
+}
+
+.daily-tasks-head {
+  margin: 4px 0 2px;
+  font-size: 16px;
+  color: var(--text);
+}
+
+.daily-tasks-meta {
+  margin: 0 0 10px;
+  color: var(--text-dim);
+  font-size: 12.5px;
+}
+
+.daily-tasks-hint {
+  margin: 14px 0 0;
+  color: var(--text-dim);
+  font-size: 12px;
+}
+
+/* ---------- 聊天参考文件（📎/📁 添加的 chips） ---------- */
+
+.chat-attach-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 2px 8px 4px;
+}
+
+.chat-attach-chip {
+  display: inline-flex;
+  align-items: center;
+  max-width: 200px;
+  gap: 4px;
+  padding: 1px 6px;
+  border: 1px solid var(--chat-context-border);
+  border-radius: 8px;
+  background: var(--bg-elevated);
+  color: var(--text-dim);
+  font-size: 11px;
+}
+
+.chat-attach-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-attach-remove {
+  flex: none;
+  border: none;
+  background: none;
+  color: var(--text-dim);
+  cursor: pointer;
+  font-size: 11px;
+  padding: 0 2px;
+}
+
+.chat-attach-remove:hover {
+  color: var(--text);
+}

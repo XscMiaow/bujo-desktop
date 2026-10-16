@@ -275,19 +275,19 @@ function emptySheet(title) {
   return `# ${title}\n\n## 任务\n\n## 笔记\n`;
 }
 
-function readSection(content, label) {
-  const lines = content.replace(/\r\n?/g, '\n').split('\n');
-  const start = lines.findIndex((l) => /^\s*#{1,6}\s/.test(l) && l.trim().replace(/[#\s]/g, '') === label);
-  if (start === -1) return [];
-  const out = [];
-  for (let i = start + (lines[start + 1] === '' ? 2 : 1); i < lines.length; i++) {
-    if (/^\s*#{1,6}\s/.test(lines[i])) break;
-    if (lines[i].trim() !== '') out.push(lines[i]);
-  }
-  return out;
+/** 计数：出现的次数（相同内容在目标日志里断言「只有一份」时用） */
+function countOccurrences(text, needle) {
+  return String(text || '').split(String(needle)).length - 1;
 }
 
-test('moveBullet 迁移：原文就地标 [>]，目标任务的「任务」小节补一条待办', async () => {
+/** 比对前剥掉行尾的迁移关联标记（HTML 注释），看到的才是正文 */
+function stripMarkerComments(text) {
+  return String(text || '')
+    .replace(/[ \t]*<!--[ \t]*bujo:(?:from|to)[ \t][^>]*-->/g, '')
+    .replace(/[ \t]+(\r?\n)/g, '$1');
+}
+
+test('moveBullet 迁移：原文就地标 [>]，目标末尾追加待办（带迁移关联标记）', async () => {
   const src = path.join(tmpDir, 'mv-src.md');
   const dest = path.join(tmpDir, 'mv-dest.md');
   await fs.writeFile(src, '- [ ] 写周报\n', 'utf8');
@@ -295,13 +295,14 @@ test('moveBullet 迁移：原文就地标 [>]，目标任务的「任务」小�
 
   const result = await moveBullet(src, dest, { text: '写周报', mode: 'migrate' });
   assert.equal(result.changed, true);
-  assert.equal(result.after, '- [>] 写周报', '原文留在文件里，只是换标记');
+  assert.equal(result.after, `- [>] 写周报 <!-- bujo:to ${dest} -->`, '原文留在文件里，只是换标记（行尾带去向标记）');
   assert.equal(result.destChanged, true);
 
-  assert.equal(await fs.readFile(src, 'utf8'), '- [>] 写周报\n', '源文件一行不少');
+  assert.match(await fs.readFile(src, 'utf8'), /^- \[>\] 写周报 <!-- bujo:to .+ -->\n$/, '源文件一行不少');
   const destText = await fs.readFile(dest, 'utf8');
-  assert.deepEqual(readSection(destText, '任务'), ['- [ ] 写周报'], '目标任务的「任务」小节里多了一条待办');
+  assert.equal(countOccurrences(destText, '写周报'), 1, '目标里「写周报」只有一份（不重复）');
   assert.notEqual(destText, emptySheet('月度记录'), '目标日记真的被写入');
+  assert.match(destText, /- \[ \] 写周报 <!-- bujo:from .+ -->/, '副本行尾带来源标记（取消迁移时能找回）');
 });
 
 test('moveBullet 的推迟：原文标 [<]，目的地是明天的日记', async () => {
@@ -311,13 +312,13 @@ test('moveBullet 的推迟：原文标 [<]，目的地是明天的日记', async
   await fs.writeFile(dest, emptySheet('2026-10-14 星期三'));
 
   const result = await moveBullet(src, dest, { text: '买牛奶', mode: 'postpone' });
-  assert.equal(result.after, '- [<] 买牛奶');
-  assert.deepEqual(readSection(await fs.readFile(dest, 'utf8'), '任务'), ['- [ ] 买牛奶']);
+  assert.match(result.after, /^- \[<\] 买牛奶 <!-- bujo:to /);
+  assert.ok((await fs.readFile(dest, 'utf8')).includes('- [ ] 买牛奶'));
 
-  // 优先标志两头都不可丢：[!] → [...!]，目标里仍是 [!]
+  // 优先标志两头都不可丢：[!] → [<!]，目标里仍是 [!]
   const result2 = await moveBullet(src, dest, { text: '优先改稿', mode: 'postpone' });
-  assert.equal(result2.after, '- [<!] 优先改稿', '推迟也保留优先标志');
-  assert.deepEqual(readSection(await fs.readFile(dest, 'utf8'), '任务'), ['- [ ] 买牛奶', '- [!] 优先改稿']);
+  assert.match(result2.after, /^- \[<!\] 优先改稿/);
+  assert.match((await fs.readFile(dest, 'utf8')), /- \[!\] 优先改稿/);
 });
 
 test('moveBullet 笔记与事件同样能迁，类型与所带的修饰符原样保留', async () => {
@@ -327,30 +328,28 @@ test('moveBullet 笔记与事件同样能迁，类型与所带的修饰符原样
   await fs.writeFile(dest, emptySheet('未来记录'));
 
   const note = await moveBullet(src, dest, { text: '整理收件箱', mode: 'migrate' });
-  assert.equal(note.after, '- [>] 整理收件箱');
+  assert.match(note.after, /^- \[>\] 整理收件箱/);
 
   const event = await moveBullet(src, dest, { text: '10:30 例会', mode: 'migrate' });
-  assert.equal(event.after, '- [>] 10:30 例会', '事件也要能找到正文（text 带时间，与界面一致）');
+  assert.match(event.after, /^- \[>\] 10:30 例会/, '事件也要能找到正文（text 带时间，与界面一致）');
 
   const priority = await moveBullet(src, dest, { text: '优先笔记', mode: 'migrate' });
-  assert.equal(priority.after, '- [>!] 优先笔记');
+  assert.match(priority.after, /^- \[>\!\] 优先笔记/, '迁移/推迟/优先全保留');
 
-  const destText = await fs.readFile(dest, 'utf8');
-  assert.deepEqual(readSection(destText, '笔记'), [
-    '- 整理收件箱',
-    'o 10:30 例会',
-    '- [n!] 优先笔记'
-  ], '笔记/事件归到「笔记」小节，优先标志保留');
+  const destText = stripMarkerComments(await fs.readFile(dest, 'utf8'));
+  assert.ok(destText.includes('- 整理收件箱'), '笔记迁入保留真实写法');
+  assert.ok(destText.includes('o 10:30 例会'), '事件迁入保留真实写法');
+  assert.ok(destText.includes('- [n!] 优先笔记'), '优先标志保留');
 });
 
-test('moveBullet：已迁移的源行拒绝再迁；取消迁移后可重迁且目标不重复', async () => {
+test('moveBullet：已迁移的源行拒绝再迁；取消迁移收掉目标副本，重迁不残留', async () => {
   const src = path.join(tmpDir, 'dup-src.md');
   const dest = path.join(tmpDir, 'dup-dest.md');
   await fs.writeFile(src, '- [ ] 迁移教程\n', 'utf8');
   await fs.writeFile(dest, emptySheet('月度记录'));
 
   await moveBullet(src, dest, { text: '迁移教程', mode: 'migrate' });
-  assert.equal((await fs.readFile(src, 'utf8')).includes('- [>] 迁移教程'), true);
+  assert.match(await fs.readFile(src, 'utf8'), /- \[>\] 迁移教程 <!-- bujo:to /);
 
   // 已迁移（[>]）的条目不能再从原地迁，先取消迁移
   await assert.rejects(
@@ -358,30 +357,60 @@ test('moveBullet：已迁移的源行拒绝再迁；取消迁移后可重迁且�
     /不能继续迁移.*取消迁移/
   );
 
-  // 取消迁移：恢复为普通待办
+  // 取消迁移：恢复为普通待办，且当初写进目标日志的副本被自动收掉
   const restored = await setBulletMark(src, { text: '迁移教程', mark: ' ' });
-  assert.match(restored.after, /^- \[ \] 迁移教程$/);
+  assert.match(restored.after, /^- \[ \] 迁移教程$/, '恢复为普通待办（去向标记随之剥掉）');
+  assert.equal(restored.destCleanup.removed, true, '目标日志里的原样副本被收掉');
+  assert.equal(countOccurrences(await fs.readFile(dest, 'utf8'), '迁移教程'), 0, '目标里没留下多余子弹');
 
-  // 重新迁移：同一件事（目标里已有一份），不会重复加
+  // 重新迁移：副本已收掉，这次写入是全新的一份（目标里只有一条）
   const again = await moveBullet(src, dest, { text: '迁移教程', mode: 'migrate' });
   assert.equal(again.changed, true, '源行恢复成 [>]');
-  assert.equal(again.destChanged, false, '目标已有一份，不重复加（去重）');
-  assert.deepEqual(readSection(await fs.readFile(dest, 'utf8'), '任务'), ['- [ ] 迁移教程']);
+  assert.equal(again.destChanged, true, '副本已收掉，本次写入是全新的一份');
+  assert.equal(countOccurrences(await fs.readFile(dest, 'utf8'), '迁移教程'), 1, '目标里「迁移教程」只有一份');
 });
 
 test('moveBullet：目标日志里的副本再迁一次 = 重新迁移旧项目', async () => {
-  const src = path.join(tmpDir, 'dup-src.md');
   const dest = path.join(tmpDir, 'dup-dest.md');
-  await fs.writeFile(src, '- [>] 迁移教程\n', 'utf8');
-  await fs.writeFile(dest, `# 月度记录\n\n## 任务\n\n- [ ] 迁移教程\n\n## 笔记\n`, 'utf8');
+  await fs.writeFile(dest, '# 月度记录\n\n## 任务\n\n- [ ] 迁移教程\n\n## 笔记\n', 'utf8');
 
   // 在月度记录里，那份副本是一个普通的新条目：迁去未来记录不受「已迁移」限制
   const future = path.join(tmpDir, 'future.md');
   await fs.writeFile(future, emptySheet('未来记录'));
   const remigrate = await moveBullet(dest, future, { text: '迁移教程', mode: 'migrate' });
   assert.equal(remigrate.changed, true, '月度记录里那一行就地标 [>]');
-  assert.equal(readSection(await fs.readFile(future, 'utf8'), '任务').join(''), '- [ ] 迁移教程', '未来记录按待办重开一份');
+  assert.equal(countOccurrences(await fs.readFile(future, 'utf8'), '迁移教程'), 1, '未来记录按待办重开一份（一份不多）');
 });
+
+test('moveBullet：无需「笔记/任务」小节也能写入末尾（去掉分节插入规则）', async () => {
+  const src = path.join(tmpDir, 'no-section-src.md');
+  const dest = path.join(tmpDir, 'no-section-dest.md');
+  await fs.writeFile(src, '- [ ] 自由条目\n', 'utf8');
+  await fs.writeFile(dest, '# 随手写的日记，没有任务/笔记小节\n\n- 早上记了一点东西\n', 'utf8');
+
+  const moved = await moveBullet(src, dest, { text: '自由条目', mode: 'migrate' });
+  assert.equal(moved.destChanged, true, '没有小节也能整合写入（末尾追加）');
+  const destText = await fs.readFile(dest, 'utf8');
+  assert.equal(countOccurrences(destText, '自由条目'), 1);
+  assert.ok(destText.includes('早上记了一点东西'), '原有内容一行不少');
+});
+
+test('moveBullet：已改状态的副本在取消迁移时保留（只有原样副本才收掉）', async () => {
+  const src = path.join(tmpDir, 'keep-src.md');
+  const dest = path.join(tmpDir, 'keep-dest.md');
+  await fs.writeFile(src, '- [ ] 维持副本\n', 'utf8');
+  await fs.writeFile(dest, emptySheet('月度记录'));
+
+  await moveBullet(src, dest, { text: '维持副本', mode: 'migrate' });
+  // 用户已把目标里的副本标记为完成：这不是「原样迁入」的副本，取消迁移时保留
+  await setBulletMark(dest, { text: '维持副本', mark: 'x' });
+
+  const restored = await setBulletMark(src, { text: '维持副本', mark: ' ' });
+  assert.equal(restored.destCleanup.removed, false, '已改状态的副本不被自动收掉');
+  assert.match(restored.destCleanup.reason, /保留|已是/);
+  assert.ok((await fs.readFile(dest, 'utf8')).includes('- [x] 维持副本'), '目标里的完成态副本还在');
+});
+
 
 test('moveBullet：已划去/已完成的源行也坚决不迁', async () => {
   const src = path.join(tmpDir, 'blocked-src.md');

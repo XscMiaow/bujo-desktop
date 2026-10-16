@@ -62,8 +62,11 @@ test('从文件夹与文件名推断归属（年 / 月）与角色', () => {
 
   assert.equal(roleOf('2026-10-07.md'), 'daily');
   assert.equal(roleOf('2026-10.md'), 'monthly');
+  // 旧版中文名与新默认英文名都是同一种角色
   assert.equal(roleOf('月度记录.md'), 'monthly');
+  assert.equal(roleOf('Monthly Log.md'), 'monthly');
   assert.equal(roleOf('未来记录.md'), 'future');
+  assert.equal(roleOf('Future Log.md'), 'future');
   assert.equal(roleOf('future-log.md'), 'future');
   assert.equal(roleOf('随手记.md'), 'other');
 });
@@ -157,18 +160,18 @@ test('ensureDailyJournal 建在 年/月 文件夹里，再调用不会重复写'
   assert.equal(await fs.readFile(first.path, 'utf8'), '- [ ] 我写了一点东西\n', '已存在时不会覆盖');
 });
 
-test('ensureMonthlyJournal / ensureFutureLog 按各自文件夹与模板建', async () => {
+test('ensureMonthlyJournal / ensureFutureLog 按各自文件夹与模板建（默认英文模板）', async () => {
   const dir = path.join(tmpDir, 'periodic');
 
   const monthly = await ensureMonthlyJournal(dir, DAY);
-  assert.equal(path.relative(dir, monthly.path).replaceAll('\\', '/'), '2026/2026-10/月度记录.md');
+  assert.equal(path.relative(dir, monthly.path).replaceAll('\\', '/'), '2026/2026-10/Monthly Log.md');
   assert.equal(await fs.readFile(monthly.path, 'utf8'), monthlyTemplate(DAY));
-  assert.equal(monthlyTemplate(DAY), '# 2026 年 10 月 · 月度记录\n\n## 任务\n\n## 笔记\n');
+  assert.equal(monthlyTemplate(DAY), '# October 2026 · Monthly Log\n\n## Tasks\n\n## Notes\n');
 
   const future = await ensureFutureLog(dir, DAY);
-  assert.equal(path.relative(dir, future.path).replaceAll('\\', '/'), '2026/未来记录.md');
+  assert.equal(path.relative(dir, future.path).replaceAll('\\', '/'), '2026/Future Log.md');
   assert.equal(await fs.readFile(future.path, 'utf8'), futureTemplate(DAY));
-  assert.equal(futureTemplate(DAY), '# 2026 年 · 未来记录\n\n## 任务\n\n## 笔记\n');
+  assert.equal(futureTemplate(DAY), '# 2026 · Future Log\n\n## Tasks\n\n## Notes\n');
 
   // 再调用不覆盖
   assert.equal((await ensureMonthlyJournal(dir, DAY)).created, false);
@@ -191,9 +194,9 @@ test('一次性迁移：平铺的日期日记与月记移进 年/月 文件夹�
     '# 旧日记\n'
   );
   assert.equal(
-    await fs.readFile(path.join(dir, '2026', '2026-09', '月度记录.md'), 'utf8'),
+    await fs.readFile(path.join(dir, '2026', '2026-09', 'Monthly Log.md'), 'utf8'),
     '# 旧月记\n',
-    '旧平铺月记应改名为月度记录.md 放进对应月文件夹'
+    '旧平铺月记应改名为 Monthly Log.md 放进对应月文件夹'
   );
   assert.ok(await fs.access(path.join(dir, 'future-log.md')).then(() => true, () => false), '非日期命名的散件原地不动');
   assert.ok(await fs.access(path.join(dir, STRUCTURE_MARKER)).then(() => true, () => false), '迁移完成要留标记');
@@ -226,13 +229,13 @@ test('ensureMoveDestination：明天/下月跨月跨年归位，未来记录按�
   assert.ok((await fs.readFile(tomorrow.path, 'utf8')).startsWith('# 2027-01-01'));
 
   const next = await ensureMoveDestination(dir, { kind: 'nextMonth', date: '2026-12-05' });
-  assert.equal(path.relative(dir, next.path).replaceAll('\\', '/'), '2027/2027-01/月度记录.md');
-  assert.equal(next.label, '2027 年 1 月 · 月度记录');
+  assert.equal(path.relative(dir, next.path).replaceAll('\\', '/'), '2027/2027-01/Monthly Log.md');
+  assert.equal(next.label, '下月（2027-01-01）的 Monthly Log');
   assert.equal(await fs.readFile(next.path, 'utf8'), monthlyTemplate(new Date(2027, 0, 1)));
 
   const future = await ensureMoveDestination(dir, { kind: 'future', date: '2026-10-13' });
-  assert.equal(path.relative(dir, future.path).replaceAll('\\', '/'), '2026/未来记录.md');
-  assert.equal(future.label, '2026 年 · 未来记录');
+  assert.equal(path.relative(dir, future.path).replaceAll('\\', '/'), '2026/Future Log.md');
+  assert.equal(future.label, '2026 Future Log');
 
   // 字符串简写、重复调用不覆盖
   assert.equal((await ensureMoveDestination(dir, 'future')).created, false);
@@ -259,8 +262,9 @@ test('日期与年月标签按本地时间算', () => {
   assert.equal(parseMonthKey('随便'), null);
   assert.equal(parseYearKey('2026').getFullYear(), 2026);
   assert.equal(parseYearKey('202x'), null);
-  assert.equal(monthLabel(new Date(2026, 9, 13)), '2026 年 10 月');
-  assert.equal(yearLabel(new Date(2026, 9, 13)), '2026 年');
+  // 年度/月度记录默认用英文生成：月份标签也是英文的
+  assert.equal(monthLabel(new Date(2026, 9, 13)), 'October 2026');
+  assert.equal(yearLabel(new Date(2026, 9, 13)), '2026');
 });
 
 test('真实 journals 目录已是 年/月 嵌套结构', async () => {

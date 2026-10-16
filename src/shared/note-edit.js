@@ -69,6 +69,8 @@
   /** 归一化：去掉列表符号、复选框（含 [-n]/[-e]/[-!] 这类双字符划去标记）、Markdown 记号、空白与标点，只留可比对的内容 */
   function normalizeForMatch(line) {
     return String(line == null ? '' : line)
+      // 迁移关联标记（bujo:to / bujo:from 的 HTML 注释）不算正文，比对应剥掉
+      .replace(/<!--[ \t]*bujo:(?:from|to)[^>]*-->/g, '')
       .replace(/^\s*(?:[-*+]|\d+[.)])\s+/, '')
       .replace(/^\s*[-*+]?\s*\[[^\]]{1,3}\]\s*/, '')
       .replace(/^\s*[•·○]\s*/, '')
